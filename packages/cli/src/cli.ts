@@ -3,8 +3,7 @@
 import { Command } from "commander"
 import chalk from "chalk"
 import ora from "ora"
-import { YaDiskClient } from "./client"
-import { getToken, runOAuthFlow } from "./auth"
+import { YaDiskClient, getToken, runOAuthFlow } from "@vforsh/yadisk"
 import {
   formatDiskInfo,
   formatResourceList,
@@ -17,7 +16,7 @@ import { basename } from "path"
 const program = new Command()
 
 function getClient(): YaDiskClient {
-  const token = getToken(program.opts().token)
+  const token = getToken({ token: program.opts().token })
   return new YaDiskClient(token)
 }
 

@@ -1,0 +1,13 @@
+{
+  "name": "@vforsh/yadisk",
+  "version": "1.0.0",
+  "description": "Programmatic API for Yandex.Disk file management",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7"
+  }
+}

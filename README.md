@@ -1,8 +1,8 @@
 # yadisk
 
-![yadisk cover](cover.png)
+![yadisk cover](./cover.png)
 
-CLI tool for Yandex.Disk file management. Upload, download, list, copy, move, delete, publish files — all from the terminal.
+Yandex.Disk file management — programmatic API + CLI. Upload, download, list, copy, move, delete, publish files.
 
 ## Install
 
@@ -12,7 +12,7 @@ Requires [Bun](https://bun.sh/).
 git clone https://github.com/vforsh/yadisk.git
 cd yadisk
 bun install
-bun link
+cd packages/cli && bun link
 ```
 
 ## Auth
@@ -45,6 +45,29 @@ yadisk unpublish <path>                      # remove public access
 ```
 
 Global flags: `--json` (raw JSON output), `--token <token>` (override auth).
+
+## Programmatic Usage
+
+Import `@vforsh/yadisk` in your own scripts or packages:
+
+```typescript
+import { YaDiskClient, getToken } from "@vforsh/yadisk"
+
+const token = getToken()
+const client = new YaDiskClient(token)
+
+// Upload and publish
+const url = await client.getUploadUrl("/uploads/build.zip", true)
+await client.upload(url, "./build.zip")
+await client.publish("/uploads/build.zip")
+const publicUrl = await client.getPublicUrl("/uploads/build.zip")
+
+// List folder
+const folder = await client.list("/uploads", { limit: 50, sort: "-modified" })
+
+// Delete
+await client.delete("/uploads/old-build.zip")
+```
 
 ## Examples
 

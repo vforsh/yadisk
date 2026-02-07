@@ -59,3 +59,7 @@ export interface ListOptions {
   offset?: number
   sort?: string
 }
+
+export interface GetTokenOptions {
+  token?: string
+}

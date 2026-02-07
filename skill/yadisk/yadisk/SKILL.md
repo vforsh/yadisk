@@ -1,15 +1,15 @@
 ---
 name: yadisk
 description: >
-  Upload, download, and manage files on Yandex.Disk via the `yadisk` CLI.
+  Upload, download, and manage files on Yandex.Disk via the `yadisk` CLI or `@vforsh/yadisk` API.
   Use when the user wants to: (1) upload files to Yandex.Disk, (2) download files from Yandex.Disk,
   (3) list/browse Yandex.Disk contents, (4) create/delete/move/copy files or folders on Yandex.Disk,
   (5) publish or unpublish resources, (6) check Yandex.Disk usage, (7) authenticate with Yandex.Disk OAuth.
 ---
 
-# yadisk CLI
+# yadisk
 
-Bun-based CLI at `~/dev/yadisk/` for Yandex.Disk REST API. Globally linked as `yadisk`.
+Bun-based monorepo at `~/dev/yadisk/` for Yandex.Disk REST API. Two packages: `@vforsh/yadisk` (programmatic API) and `@vforsh/yadisk-cli` (CLI, globally linked as `yadisk`).
 
 ## Auth
 
@@ -63,5 +63,28 @@ done
 ```bash
 yadisk ls /uploads --limit 50 --sort -modified
 yadisk download /uploads/build.zip ./build.zip
+```
+
+## Programmatic API
+
+Import `@vforsh/yadisk` in scripts or other packages:
+
+```typescript
+import { YaDiskClient, getToken } from "@vforsh/yadisk"
+
+const token = getToken()
+const client = new YaDiskClient(token)
+
+// Upload and publish
+const url = await client.getUploadUrl("/uploads/build.zip", true)
+await client.upload(url, "./build.zip")
+await client.publish("/uploads/build.zip")
+const publicUrl = await client.getPublicUrl("/uploads/build.zip")
+
+// List folder
+const folder = await client.list("/uploads", { limit: 50, sort: "-modified" })
+
+// Delete
+await client.delete("/uploads/old-build.zip")
 ```
 

@@ -1,12 +1,13 @@
 import { homedir } from "os"
 import { join } from "path"
+import type { GetTokenOptions } from "./types"
 
 const CONFIG_DIR = join(homedir(), ".config", "yadisk")
 const TOKEN_FILE = join(CONFIG_DIR, "token")
 
-export function getToken(flagToken?: string): string {
-  // 1. --token flag
-  if (flagToken) return flagToken
+export function getToken(options?: GetTokenOptions): string {
+  // 1. explicit token
+  if (options?.token) return options.token
 
   // 2. YADISK_TOKEN env
   const envToken = process.env.YADISK_TOKEN

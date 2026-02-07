@@ -1,4 +1,4 @@
-import type { DiskInfo, Resource } from "./types"
+import type { DiskInfo, Resource } from "@vforsh/yadisk"
 
 // --- Size Formatting ---
 
