@@ -1,0 +1,21 @@
+{
+  "name": "yadisk",
+  "version": "1.0.0",
+  "description": "CLI tool for Yandex.Disk file management",
+  "type": "module",
+  "bin": {
+    "yadisk": "./src/cli.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7"
+  },
+  "dependencies": {
+    "chalk": "^5",
+    "commander": "^14",
+    "ora": "^9"
+  }
+}
