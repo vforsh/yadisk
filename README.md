@@ -17,16 +17,37 @@ cd packages/cli && bun link
 
 ## Auth
 
-Get an OAuth token from [Yandex OAuth](https://oauth.yandex.ru/) and provide it via:
+### 1. Register an OAuth app
 
-1. `--token` flag
-2. `YADISK_TOKEN` environment variable
-3. Config file at `~/.config/yadisk/token`
-4. Interactive OAuth flow:
+Create an app at [oauth.yandex.com/client/new](https://oauth.yandex.com/client/new/):
+
+- **Platform** — Web services
+- **Redirect URI** — `https://oauth.yandex.ru/verification_code`
+- **Permissions** — expand **Yandex.Disk REST API**, select:
+  - `cloud_api:disk.read` — read files/folders
+  - `cloud_api:disk.write` — create/upload/modify/delete
+  - `cloud_api:disk.info` — disk usage
+  - `cloud_api:disk.app_folder` — app folder access
+
+After saving, grab the **Client ID** from the [OAuth control panel](https://oauth.yandex.com/) — it's the alphanumeric string identifying your app.
+
+### 2. Get a token
 
 ```bash
-yadisk auth --client-id <your-app-client-id>
+yadisk auth --client-id <your-client-id>
 ```
+
+Opens an authorization URL → log in → grant access → copy token → paste back. Token saved to `~/.config/yadisk/token`.
+
+### Token resolution
+
+First match wins:
+
+1. `--token <token>` flag
+2. `YADISK_TOKEN` env var
+3. `~/.config/yadisk/token` file
+
+Tokens are long-lived (1+ year). If one expires, re-run `yadisk auth`.
 
 ## Usage
 
