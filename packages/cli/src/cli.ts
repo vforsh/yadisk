@@ -3,7 +3,16 @@
 import { Command } from "commander"
 import chalk from "chalk"
 import ora from "ora"
-import { YaDiskClient, getToken, runOAuthFlow } from "@vforsh/yadisk"
+import {
+  YaDiskClient,
+  getToken,
+  runOAuthFlow,
+  getConfig,
+  getConfigValue,
+  setConfigValue,
+  deleteConfigValue,
+  isValidConfigKey,
+} from "@vforsh/yadisk"
 import {
   formatDiskInfo,
   formatResourceList,
@@ -18,6 +27,19 @@ const program = new Command()
 function getClient(): YaDiskClient {
   const token = getToken({ token: program.opts().token })
   return new YaDiskClient(token)
+}
+
+function resolveUploadDest(file: string, dest?: string): string {
+  if (dest) return dest
+  const uploadDir = getConfigValue("upload_dir")
+  if (!uploadDir) {
+    console.error(
+      "Error: No destination specified.\n" +
+        "Provide <dest> argument or set default: yadisk config set upload_dir /path"
+    )
+    process.exit(1)
+  }
+  return `${uploadDir.replace(/\/$/, "")}/${basename(file)}`
 }
 
 program
@@ -45,6 +67,73 @@ program
       spinner.fail("Token validation failed")
       throw err
     }
+  })
+
+// --- yadisk config ---
+
+const configCmd = program
+  .command("config")
+  .description("Manage configuration")
+
+configCmd
+  .command("set")
+  .description("Set a config value")
+  .argument("<key>", "Config key (upload_dir)")
+  .argument("<value>", "Config value")
+  .action((key: string, value: string) => {
+    if (!isValidConfigKey(key)) {
+      console.error(`Unknown config key: ${key}`)
+      console.error("Valid keys: upload_dir")
+      process.exit(1)
+    }
+    setConfigValue(key, value)
+    console.log(`${key} = ${value}`)
+  })
+
+configCmd
+  .command("get")
+  .description("Get a config value")
+  .argument("<key>", "Config key")
+  .action((key: string) => {
+    if (!isValidConfigKey(key)) {
+      console.error(`Unknown config key: ${key}`)
+      process.exit(1)
+    }
+    const value = getConfigValue(key)
+    if (value !== undefined) {
+      console.log(value)
+    } else {
+      console.error(`${key} is not set`)
+      process.exit(1)
+    }
+  })
+
+configCmd
+  .command("list")
+  .description("List all config values")
+  .action(() => {
+    const config = getConfig()
+    const entries = Object.entries(config)
+    if (entries.length === 0) {
+      console.log("No config values set.")
+    } else {
+      for (const [key, value] of entries) {
+        console.log(`${key} = ${value}`)
+      }
+    }
+  })
+
+configCmd
+  .command("unset")
+  .description("Remove a config value")
+  .argument("<key>", "Config key")
+  .action((key: string) => {
+    if (!isValidConfigKey(key)) {
+      console.error(`Unknown config key: ${key}`)
+      process.exit(1)
+    }
+    deleteConfigValue(key)
+    console.log(`Removed: ${key}`)
   })
 
 // --- yadisk info ---
@@ -126,28 +215,29 @@ program
   .command("upload")
   .description("Upload a local file to Yandex.Disk")
   .argument("<file>", "Local file path")
-  .argument("<dest>", "Destination disk path")
+  .argument("[dest]", "Destination disk path (default: <upload_dir>/<filename>)")
   .option("--overwrite", "Overwrite existing file", true)
   .option("--publish", "Publish after upload")
-  .action(async (file: string, dest: string, options) => {
+  .action(async (file: string, dest: string | undefined, options) => {
     const client = getClient()
 
+    const resolvedDest = resolveUploadDest(file, dest)
     const fileObj = Bun.file(file)
     const size = fileObj.size
     const spinner = ora(`Uploading ${basename(file)} (${formatSize(size)})...`).start()
 
     try {
-      const uploadUrl = await client.getUploadUrl(dest, options.overwrite)
+      const uploadUrl = await client.getUploadUrl(resolvedDest, options.overwrite)
       await client.upload(uploadUrl, file)
-      spinner.succeed(`Uploaded: ${basename(file)} → ${dest}`)
+      spinner.succeed(`Uploaded: ${basename(file)} → ${resolvedDest}`)
     } catch (err) {
       spinner.fail("Upload failed")
       throw err
     }
 
     if (options.publish) {
-      await client.publish(dest)
-      const publicUrl = await client.getPublicUrl(dest)
+      await client.publish(resolvedDest)
+      const publicUrl = await client.getPublicUrl(resolvedDest)
       console.log(`Public URL: ${publicUrl}`)
     }
   })

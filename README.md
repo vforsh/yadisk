@@ -1,6 +1,6 @@
 # yadisk
 
-![yadisk cover](./cover.png)
+![yadisk cover](cover.png)
 
 Yandex.Disk file management — programmatic API + CLI. Upload, download, list, copy, move, delete, publish files.
 
