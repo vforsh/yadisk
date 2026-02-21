@@ -40,7 +40,7 @@ Monorepo with two workspace packages under `packages/`.
 - Imports `YaDiskClient`, auth helpers, and types from `@vforsh/yadisk`.
 
 ### Root
-- **Skill**: `skill/yadisk/yadisk/SKILL.md` — user-facing skill for AI agents.
+- **Skill**: `skill/yadisk/SKILL.md` — user-facing skill for AI agents.
 
 ---
 
