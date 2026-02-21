@@ -1,8 +1,9 @@
 {
   "name": "@vforsh/yadisk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Programmatic API for Yandex.Disk file management via WebDAV",
   "type": "module",
+  "files": ["src"],
   "exports": {
     ".": "./src/index.ts"
   },

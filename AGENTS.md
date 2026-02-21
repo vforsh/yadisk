@@ -44,6 +44,16 @@ Monorepo with two workspace packages under `packages/`.
 
 ---
 
+## Publish
+
+- **Script**: `bun run publish` (or `./scripts/publish.sh`).
+- Publishes `@vforsh/yadisk` first, then `@vforsh/yadisk-cli`.
+- Automatically resolves `workspace:*` → `^<api-version>` in CLI's `package.json` before publish, restores after.
+- Bump versions in both `packages/yadisk/package.json` and `packages/cli/package.json` before running.
+- npm token: resolved via `NPM_TOKEN` env or fetched from Bitwarden (`bwx`).
+
+---
+
 ## Contracts
 
 - **Auth header**: `Authorization: Basic base64(user:pass)` on all WebDAV calls.
