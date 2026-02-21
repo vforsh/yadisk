@@ -29,7 +29,7 @@ Monorepo with two workspace packages under `packages/`.
 
 ### `packages/yadisk/` — `@vforsh/yadisk` (programmatic API)
 - **Entry**: `src/index.ts` — public API re-exports.
-- **Client**: `src/client.ts` — `YaDiskClient` class, typed wrapper over Yandex.Disk WebDAV API.
+- **Client**: `src/client.ts` — `YaDiskClient` class, typed wrapper over [Yandex.Disk WebDAV API](https://yandex.ru/dev/disk/doc/en/).
 - **Auth**: `src/auth.ts` — credential resolution chain (`--username`/`--password` → env → config file).
 - **WebDAV**: `src/webdav.ts` — PROPFIND XML bodies, XML response parsers (fast-xml-parser).
 - **Types**: `src/types.ts` — `DiskInfo`, `Resource`, `Credentials`, `WebDAVError`.

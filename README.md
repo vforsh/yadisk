@@ -2,7 +2,7 @@
 
 ![yadisk cover](cover.png)
 
-Yandex.Disk file management — programmatic API + CLI via WebDAV. Upload, download, list, copy, move, delete, publish files.
+Yandex.Disk file management — programmatic API + CLI via [WebDAV](https://yandex.ru/dev/disk/doc/en/). Upload, download, list, copy, move, delete, publish files.
 
 ## Install
 
