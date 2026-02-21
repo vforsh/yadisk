@@ -57,19 +57,15 @@ function renderTable<T>(items: T[], columns: Column<T>[]): string {
 // --- Formatters ---
 
 export function formatDiskInfo(disk: DiskInfo): string {
-  const total = formatSize(disk.total_space)
-  const used = formatSize(disk.used_space)
-  const free = formatSize(disk.total_space - disk.used_space)
-  const trash = formatSize(disk.trash_size)
-  const pct = ((disk.used_space / disk.total_space) * 100).toFixed(1)
+  const total = formatSize(disk.total_bytes)
+  const used = formatSize(disk.used_bytes)
+  const free = formatSize(disk.available_bytes)
+  const pct = ((disk.used_bytes / disk.total_bytes) * 100).toFixed(1)
 
   return [
-    `User:    ${disk.user.display_name} (${disk.user.login})`,
     `Total:   ${total}`,
     `Used:    ${used} (${pct}%)`,
     `Free:    ${free}`,
-    `Trash:   ${trash}`,
-    `Plan:    ${disk.is_paid ? "paid" : "free"}`,
   ].join("\n")
 }
 
@@ -78,7 +74,7 @@ export function formatResourceList(items: Resource[]): string {
   return renderTable(items, [
     {
       header: "Type",
-      value: (r) => (r.type === "dir" ? "dir" : r.mime_type ?? "file"),
+      value: (r) => (r.type === "dir" ? "dir" : r.content_type ?? "file"),
       width: 6,
     },
     {
@@ -88,7 +84,7 @@ export function formatResourceList(items: Resource[]): string {
     },
     {
       header: "Modified",
-      value: (r) => r.modified.replace("T", " ").slice(0, 19),
+      value: (r) => formatDate(r.modified),
       width: 19,
     },
     { header: "Name", value: "name" },
@@ -96,21 +92,28 @@ export function formatResourceList(items: Resource[]): string {
 }
 
 export function formatResource(resource: Resource): string {
+  const type = resource.content_type ?? resource.type
   const lines = [
     `Name:     ${resource.name}`,
     `Path:     ${resource.path}`,
-    `Type:     ${resource.type}`,
+    `Type:     ${type}`,
   ]
   if (resource.size !== undefined) lines.push(`Size:     ${formatSize(resource.size)}`)
-  if (resource.mime_type) lines.push(`MIME:     ${resource.mime_type}`)
-  lines.push(`Created:  ${resource.created}`)
-  lines.push(`Modified: ${resource.modified}`)
-  if (resource.md5) lines.push(`MD5:      ${resource.md5}`)
-  if (resource.sha256) lines.push(`SHA256:   ${resource.sha256}`)
-  if (resource.public_url) lines.push(`Public:   ${resource.public_url}`)
+  lines.push(`Created:  ${formatDate(resource.created)}`)
+  lines.push(`Modified: ${formatDate(resource.modified)}`)
+  if (resource.etag) lines.push(`ETag:     ${resource.etag}`)
   return lines.join("\n")
 }
 
 export function formatJson(data: unknown): string {
   return JSON.stringify(data, null, 2)
+}
+
+function formatDate(dateStr: string): string {
+  if (!dateStr) return "-"
+  try {
+    return new Date(dateStr).toISOString().replace("T", " ").slice(0, 19)
+  } catch {
+    return dateStr.slice(0, 19)
+  }
 }

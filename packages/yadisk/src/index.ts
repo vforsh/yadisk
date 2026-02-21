@@ -1,5 +1,5 @@
 export { YaDiskClient } from "./client"
-export { getToken, saveToken, runOAuthFlow } from "./auth"
+export { getCredentials, encodeBasicAuth } from "./auth"
 export {
   getConfig,
   getConfigValue,
@@ -8,13 +8,4 @@ export {
   isValidConfigKey,
 } from "./config"
 export type { YaDiskConfig } from "./config"
-export type {
-  DiskInfo,
-  Resource,
-  ResourceList,
-  Link,
-  Operation,
-  ApiError,
-  ListOptions,
-  GetTokenOptions,
-} from "./types"
+export type { DiskInfo, Resource, Credentials, GetCredentialsOptions, WebDAVError } from "./types"

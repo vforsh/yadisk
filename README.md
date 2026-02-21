@@ -2,7 +2,7 @@
 
 ![yadisk cover](cover.png)
 
-Yandex.Disk file management — programmatic API + CLI. Upload, download, list, copy, move, delete, publish files.
+Yandex.Disk file management — programmatic API + CLI via WebDAV. Upload, download, list, copy, move, delete, publish files.
 
 ## Install
 
@@ -17,74 +17,64 @@ cd packages/cli && bun link
 
 ## Auth
 
-### 1. Register an OAuth app
+Uses [app passwords](https://id.yandex.ru/security/app-passwords) — no OAuth app registration needed.
 
-Create an app at [oauth.yandex.com/client/new](https://oauth.yandex.com/client/new/):
+### 1. Create an app password
 
-- **Platform** — Web services
-- **Redirect URI** — `https://oauth.yandex.ru/verification_code`
-- **Permissions** — expand **Yandex.Disk REST API**, select:
-  - `cloud_api:disk.read` — read files/folders
-  - `cloud_api:disk.write` — create/upload/modify/delete
-  - `cloud_api:disk.info` — disk usage
-  - `cloud_api:disk.app_folder` — app folder access
+1. Open [Yandex ID](https://id.yandex.ru/) → **Безопасность** (Security) in the left sidebar
+2. Scroll to **Пароли приложений** (App passwords) → click **Файлы — WebDAV**
+3. Enter any name (e.g. `yadisk-cli`) → copy the generated password
 
-After saving, grab the **Client ID** from the [OAuth control panel](https://oauth.yandex.com/) — it's the alphanumeric string identifying your app.
-
-### 2. Get a token
+### 2. Authenticate
 
 ```bash
-yadisk auth --client-id <your-client-id>
+yadisk auth
 ```
 
-Opens an authorization URL → log in → grant access → copy token → paste back. Token saved to `~/.config/yadisk/token`.
+Prompts for username and app password → validates via WebDAV → saves to `~/.config/yadisk/config.json`.
 
-### Token resolution
+### Credentials resolution
 
 First match wins:
 
-1. `--token <token>` flag
-2. `YADISK_TOKEN` env var
-3. `~/.config/yadisk/token` file
-
-Tokens are long-lived (1+ year). If one expires, re-run `yadisk auth`.
+1. `--username` + `--password` flags
+2. `YADISK_USERNAME` + `YADISK_PASSWORD` env vars
+3. `~/.config/yadisk/config.json` file
 
 ## Usage
 
 ```bash
 yadisk info                                  # disk usage/capacity
-yadisk ls <path> [--limit N] [--sort X]      # list folder
+yadisk ls <path> [--sort name|size|modified]  # list folder
 yadisk stat <path>                           # file/folder metadata
 yadisk mkdir <path>                          # create folder
-yadisk upload <file> <dest> [--publish]      # upload + optional publish
+yadisk upload <file> [dest] [--publish]       # upload + optional publish
 yadisk download <path> [local-dest]          # download file
 yadisk cp <from> <to> [--overwrite]          # copy
 yadisk mv <from> <to> [--overwrite]          # move/rename
-yadisk rm <path> [--permanently]             # delete
+yadisk rm <path>                             # delete
 yadisk publish <path>                        # make public, print URL
 yadisk unpublish <path>                      # remove public access
 ```
 
-Global flags: `--json` (raw JSON output), `--token <token>` (override auth).
+Global flags: `--json` (raw JSON output), `--username`/`--password` (override auth).
 
 ## Programmatic Usage
 
 Import `@vforsh/yadisk` in your own scripts or packages:
 
 ```typescript
-import { YaDiskClient, getToken } from "@vforsh/yadisk"
+import { YaDiskClient, getCredentials } from "@vforsh/yadisk"
 
-const token = getToken()
-const client = new YaDiskClient(token)
+const credentials = getCredentials()
+const client = new YaDiskClient(credentials)
 
 // Upload and publish
-const url = await client.getUploadUrl("/uploads/build.zip", true)
-await client.upload(url, "./build.zip")
-await client.publish("/uploads/build.zip")
-const publicUrl = await client.getPublicUrl("/uploads/build.zip")
+await client.upload("/uploads/build.zip", "./build.zip")
+const url = await client.publish("/uploads/build.zip")
 
 // List folder
-const folder = await client.list("/uploads", { limit: 50, sort: "-modified" })
+const items = await client.list("/uploads")
 
 // Delete
 await client.delete("/uploads/old-build.zip")
@@ -97,7 +87,7 @@ await client.delete("/uploads/old-build.zip")
 yadisk upload ./build.zip /uploads/build.zip --publish
 
 # List recent uploads
-yadisk ls /uploads --limit 50 --sort -modified
+yadisk ls /uploads --sort -modified
 
 # Download a file
 yadisk download /uploads/build.zip ./build.zip

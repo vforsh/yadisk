@@ -12,7 +12,7 @@
 
 - **Typecheck**: `tsc --build` (or `bun run typecheck`).
 - **Run locally**: `bun run packages/cli/src/cli.ts <command>`.
-- **Smoke test**: `yadisk --help` should list all commands. `yadisk info` requires valid token.
+- **Smoke test**: `yadisk --help` should list all commands. `yadisk info` requires valid credentials.
 
 ---
 
@@ -29,9 +29,10 @@ Monorepo with two workspace packages under `packages/`.
 
 ### `packages/yadisk/` — `@vforsh/yadisk` (programmatic API)
 - **Entry**: `src/index.ts` — public API re-exports.
-- **Client**: `src/client.ts` — `YaDiskClient` class, typed wrapper over Yandex.Disk REST API.
-- **Auth**: `src/auth.ts` — token resolution chain (`--token` → env → config file → OAuth prompt).
-- **Types**: `src/types.ts` — `DiskInfo`, `Resource`, `ResourceList`, `Link`, `Operation`, `ApiError`.
+- **Client**: `src/client.ts` — `YaDiskClient` class, typed wrapper over Yandex.Disk WebDAV API.
+- **Auth**: `src/auth.ts` — credential resolution chain (`--username`/`--password` → env → config file).
+- **WebDAV**: `src/webdav.ts` — PROPFIND XML bodies, XML response parsers (fast-xml-parser).
+- **Types**: `src/types.ts` — `DiskInfo`, `Resource`, `Credentials`, `WebDAVError`.
 
 ### `packages/cli/` — `@vforsh/yadisk-cli`
 - **Entrypoint**: `src/cli.ts` — Commander setup, all subcommands, `#!/usr/bin/env bun`.
@@ -45,8 +46,9 @@ Monorepo with two workspace packages under `packages/`.
 
 ## Contracts
 
-- **Auth header**: `Authorization: OAuth <token>` on all API calls.
-- **Base URL**: `https://cloud-api.yandex.net` — never hardcode elsewhere; lives in `packages/yadisk/src/client.ts`.
-- **Upload flow**: `getUploadUrl()` → `upload(href, file)` — two-step; upload URL is a separate host.
-- **Global flags**: `--json` and `--token` are on the root program, accessed via `program.opts()`.
-- **Programmatic API**: `import { YaDiskClient, getToken } from "@vforsh/yadisk"` — use in scripts/other packages.
+- **Auth header**: `Authorization: Basic base64(user:pass)` on all WebDAV calls.
+- **Base URL**: `https://webdav.yandex.ru` — lives in `packages/yadisk/src/client.ts`.
+- **Upload flow**: Single-step PUT to remote path.
+- **Download flow**: Single-step GET from remote path.
+- **Global flags**: `--json`, `--username`, and `--password` are on the root program, accessed via `program.opts()`.
+- **Programmatic API**: `import { YaDiskClient, getCredentials } from "@vforsh/yadisk"` — use in scripts/other packages.

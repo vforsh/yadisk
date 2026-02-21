@@ -6,10 +6,12 @@ const CONFIG_DIR = join(homedir(), ".config", "yadisk")
 const CONFIG_FILE = join(CONFIG_DIR, "config.json")
 
 export interface YaDiskConfig {
+  username?: string
+  password?: string
   upload_dir?: string
 }
 
-const KNOWN_KEYS = new Set<keyof YaDiskConfig>(["upload_dir"])
+const KNOWN_KEYS = new Set<keyof YaDiskConfig>(["username", "password", "upload_dir"])
 
 export function isValidConfigKey(key: string): key is keyof YaDiskConfig {
   return KNOWN_KEYS.has(key as keyof YaDiskConfig)

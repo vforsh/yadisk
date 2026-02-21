@@ -5,14 +5,14 @@ import chalk from "chalk"
 import ora from "ora"
 import {
   YaDiskClient,
-  getToken,
-  runOAuthFlow,
+  getCredentials,
   getConfig,
   getConfigValue,
   setConfigValue,
   deleteConfigValue,
   isValidConfigKey,
 } from "@vforsh/yadisk"
+import type { Credentials, Resource } from "@vforsh/yadisk"
 import {
   formatDiskInfo,
   formatResourceList,
@@ -21,12 +21,14 @@ import {
   formatSize,
 } from "./format"
 import { basename } from "path"
+import { createInterface } from "readline"
 
 const program = new Command()
 
 function getClient(): YaDiskClient {
-  const token = getToken({ token: program.opts().token })
-  return new YaDiskClient(token)
+  const opts = program.opts()
+  const credentials = getCredentials({ username: opts.username, password: opts.password })
+  return new YaDiskClient(credentials)
 }
 
 function resolveUploadDest(file: string, dest?: string): string {
@@ -46,27 +48,42 @@ program
   .name("yadisk")
   .description("Yandex.Disk file management CLI")
   .version("1.0.0")
-  .option("--token <token>", "OAuth token (overrides env)")
+  .option("--username <username>", "Yandex username (overrides env)")
+  .option("--password <password>", "App password (overrides env)")
   .option("--json", "Output as JSON")
 
 // --- yadisk auth ---
 
 program
   .command("auth")
-  .description("Authenticate via OAuth and save token")
-  .requiredOption("--client-id <id>", "OAuth application client ID")
-  .action(async (options) => {
-    const token = await runOAuthFlow(options.clientId)
+  .description("Authenticate with username and app password")
+  .action(async () => {
+    const username = await prompt("Username: ")
+    if (!username) {
+      console.error("Error: No username provided.")
+      process.exit(1)
+    }
 
-    const spinner = ora("Validating token...").start()
+    const password = await promptSecret("App password: ")
+    if (!password) {
+      console.error("Error: No app password provided.")
+      process.exit(1)
+    }
+
+    const credentials: Credentials = { username, password }
+    const spinner = ora("Validating credentials...").start()
     try {
-      const client = new YaDiskClient(token)
-      const disk = await client.info()
-      spinner.succeed(`Authenticated as ${disk.user.display_name} (${disk.user.login})`)
+      const client = new YaDiskClient(credentials)
+      await client.info()
+      spinner.succeed(`Authenticated as ${username}`)
     } catch (err) {
-      spinner.fail("Token validation failed")
+      spinner.fail("Authentication failed — check username and app password")
       throw err
     }
+
+    setConfigValue("username", username)
+    setConfigValue("password", password)
+    console.log("Credentials saved to ~/.config/yadisk/config.json")
   })
 
 // --- yadisk config ---
@@ -78,16 +95,16 @@ const configCmd = program
 configCmd
   .command("set")
   .description("Set a config value")
-  .argument("<key>", "Config key (upload_dir)")
+  .argument("<key>", "Config key (username, password, upload_dir)")
   .argument("<value>", "Config value")
   .action((key: string, value: string) => {
     if (!isValidConfigKey(key)) {
       console.error(`Unknown config key: ${key}`)
-      console.error("Valid keys: upload_dir")
+      console.error("Valid keys: username, password, upload_dir")
       process.exit(1)
     }
     setConfigValue(key, value)
-    console.log(`${key} = ${value}`)
+    console.log(`${key} = ${key === "password" ? "***" : value}`)
   })
 
 configCmd
@@ -101,7 +118,7 @@ configCmd
     }
     const value = getConfigValue(key)
     if (value !== undefined) {
-      console.log(value)
+      console.log(key === "password" ? "***" : value)
     } else {
       console.error(`${key} is not set`)
       process.exit(1)
@@ -118,7 +135,7 @@ configCmd
       console.log("No config values set.")
     } else {
       for (const [key, value] of entries) {
-        console.log(`${key} = ${value}`)
+        console.log(`${key} = ${key === "password" ? "***" : value}`)
       }
     }
   })
@@ -158,25 +175,18 @@ program
   .command("ls")
   .description("List folder contents")
   .argument("<path>", "Disk path (e.g. /uploads)")
-  .option("--limit <n>", "Max items", "20")
-  .option("--offset <n>", "Offset", "0")
   .option("--sort <field>", "Sort field (name, size, modified)", "name")
   .action(async (path: string, options) => {
     const client = getClient()
-    const resource = await client.list(path, {
-      limit: parseInt(options.limit, 10),
-      offset: parseInt(options.offset, 10),
-      sort: options.sort,
-    })
+    const items = await client.list(path)
+
+    const sorted = sortResources(items, options.sort)
 
     if (program.opts().json) {
-      console.log(formatJson(resource._embedded))
-    } else if (resource._embedded) {
-      console.log(formatResourceList(resource._embedded.items))
-      const { offset, limit, total } = resource._embedded
-      console.log(chalk.dim(`\n${offset + resource._embedded.items.length}/${total} items`))
+      console.log(formatJson(sorted))
     } else {
-      console.log("Not a folder or empty.")
+      console.log(formatResourceList(sorted))
+      console.log(chalk.dim(`\n${sorted.length} items`))
     }
   })
 
@@ -216,7 +226,6 @@ program
   .description("Upload a local file to Yandex.Disk")
   .argument("<file>", "Local file path")
   .argument("[dest]", "Destination disk path (default: <upload_dir>/<filename>)")
-  .option("--overwrite", "Overwrite existing file", true)
   .option("--publish", "Publish after upload")
   .action(async (file: string, dest: string | undefined, options) => {
     const client = getClient()
@@ -227,8 +236,7 @@ program
     const spinner = ora(`Uploading ${basename(file)} (${formatSize(size)})...`).start()
 
     try {
-      const uploadUrl = await client.getUploadUrl(resolvedDest, options.overwrite)
-      await client.upload(uploadUrl, file)
+      await client.upload(resolvedDest, file)
       spinner.succeed(`Uploaded: ${basename(file)} → ${resolvedDest}`)
     } catch (err) {
       spinner.fail("Upload failed")
@@ -236,8 +244,8 @@ program
     }
 
     if (options.publish) {
-      await client.publish(resolvedDest)
-      const publicUrl = await client.getPublicUrl(resolvedDest)
+      const url = await client.publish(resolvedDest)
+      const publicUrl = url ?? await client.getPublicUrl(resolvedDest)
       console.log(`Public URL: ${publicUrl}`)
     }
   })
@@ -255,8 +263,7 @@ program
 
     const spinner = ora(`Downloading ${basename(path)}...`).start()
     try {
-      const downloadUrl = await client.getDownloadUrl(path)
-      await client.download(downloadUrl, localDest)
+      await client.download(path, localDest)
       spinner.succeed(`Downloaded: ${path} → ${localDest}`)
     } catch (err) {
       spinner.fail("Download failed")
@@ -298,10 +305,9 @@ program
   .command("rm")
   .description("Delete a file or folder")
   .argument("<path>", "Disk path")
-  .option("--permanently", "Delete permanently (skip trash)")
-  .action(async (path: string, options) => {
+  .action(async (path: string) => {
     const client = getClient()
-    await client.delete(path, options.permanently)
+    await client.delete(path)
     console.log(`Deleted: ${path}`)
   })
 
@@ -313,9 +319,13 @@ program
   .argument("<path>", "Disk path")
   .action(async (path: string) => {
     const client = getClient()
-    await client.publish(path)
-    const publicUrl = await client.getPublicUrl(path)
-    console.log(publicUrl)
+    const url = await client.publish(path)
+    if (url) {
+      console.log(url)
+    } else {
+      const existing = await client.getPublicUrl(path)
+      console.log(existing ?? "Published (no URL returned)")
+    }
   })
 
 // --- yadisk unpublish ---
@@ -329,6 +339,69 @@ program
     await client.unpublish(path)
     console.log(`Unpublished: ${path}`)
   })
+
+// --- Helpers ---
+
+function prompt(message: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise((resolve) => {
+    rl.question(message, (answer) => {
+      rl.close()
+      resolve(answer.trim())
+    })
+  })
+}
+
+function promptSecret(message: string): Promise<string> {
+  process.stdout.write(message)
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, terminal: false })
+    process.stdin.setRawMode?.(true)
+    let input = ""
+    const onData = (ch: Buffer) => {
+      const c = ch.toString()
+      if (c === "\n" || c === "\r") {
+        process.stdin.setRawMode?.(false)
+        process.stdin.removeListener("data", onData)
+        rl.close()
+        process.stdout.write("\n")
+        resolve(input.trim())
+      } else if (c === "\x7f" || c === "\b") {
+        input = input.slice(0, -1)
+      } else if (c === "\x03") {
+        process.exit(130)
+      } else {
+        input += c
+      }
+    }
+    process.stdin.on("data", onData)
+  })
+}
+
+function sortResources(items: Resource[], field: string): Resource[] {
+  const sorted = [...items]
+  switch (field) {
+    case "name":
+      sorted.sort((a, b) => a.name.localeCompare(b.name))
+      break
+    case "size":
+      sorted.sort((a, b) => (a.size ?? 0) - (b.size ?? 0))
+      break
+    case "modified":
+      sorted.sort((a, b) => new Date(a.modified).getTime() - new Date(b.modified).getTime())
+      break
+    case "-name":
+      sorted.sort((a, b) => b.name.localeCompare(a.name))
+      break
+    case "-size":
+      sorted.sort((a, b) => (b.size ?? 0) - (a.size ?? 0))
+      break
+    case "-modified":
+      sorted.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime())
+      break
+  }
+  return sorted
+}
 
 // --- Run ---
 

@@ -1,147 +1,182 @@
-import type { DiskInfo, Resource, Link, ListOptions, ApiError } from "./types"
+import type { Credentials, DiskInfo, Resource, WebDAVError } from "./types"
+import { encodeBasicAuth } from "./auth"
+import {
+  QUOTA_PROPFIND,
+  RESOURCE_PROPFIND,
+  PUBLIC_URL_PROPFIND,
+  PUBLISH_PROPPATCH,
+  UNPUBLISH_PROPPATCH,
+  parseQuota,
+  parseMultiStatus,
+  parsePublicUrl,
+} from "./webdav"
 
-const BASE_URL = "https://cloud-api.yandex.net"
+const BASE_URL = "https://webdav.yandex.ru"
 
 export class YaDiskClient {
-  constructor(private token: string) {}
+  private authHeader: string
 
-  private async request<T>(
+  constructor(credentials: Credentials) {
+    this.authHeader = encodeBasicAuth(credentials)
+  }
+
+  private async request(
     method: string,
     path: string,
-    params?: Record<string, string | number | boolean | undefined>,
-    body?: BodyInit | null
-  ): Promise<T> {
-    const url = new URL(`${BASE_URL}${path}`)
-
-    if (params) {
-      for (const [key, value] of Object.entries(params)) {
-        if (value !== undefined) {
-          url.searchParams.set(key, String(value))
-        }
-      }
+    options?: {
+      body?: BodyInit | null
+      headers?: Record<string, string>
+      expectBody?: boolean
     }
+  ): Promise<Response> {
+    const url = `${BASE_URL}${encodeDavPath(path)}`
 
     const headers: Record<string, string> = {
-      Authorization: `OAuth ${this.token}`,
+      Authorization: this.authHeader,
+      ...options?.headers,
     }
 
-    if (body && typeof body === "string") {
-      headers["Content-Type"] = "application/json"
-    }
-
-    const response = await fetch(url.toString(), { method, headers, body })
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: options?.body,
+    })
 
     if (!response.ok) {
-      let errorMsg = `API error: ${response.status} ${response.statusText}`
+      const err: WebDAVError = {
+        status: response.status,
+        statusText: response.statusText,
+        message: `WebDAV error: ${response.status} ${response.statusText}`,
+      }
+
       try {
-        const err = (await response.json()) as ApiError
-        if (err.description) errorMsg = `API error: ${err.description}`
+        const text = await response.text()
+        if (text) err.message = `WebDAV error: ${response.status} — ${text.slice(0, 200)}`
       } catch {}
-      throw new Error(errorMsg)
+
+      throw new Error(err.message)
     }
 
-    if (response.status === 204 || response.headers.get("content-length") === "0") {
-      return undefined as T
-    }
-
-    return (await response.json()) as T
+    return response
   }
 
   // --- Disk Info ---
 
   async info(): Promise<DiskInfo> {
-    return this.request<DiskInfo>("GET", "/v1/disk")
+    const response = await this.request("PROPFIND", "/", {
+      body: QUOTA_PROPFIND,
+      headers: {
+        "Content-Type": "application/xml; charset=utf-8",
+        Depth: "0",
+      },
+    })
+    const xml = await response.text()
+    return parseQuota(xml)
   }
 
   // --- Resources ---
 
   async stat(path: string): Promise<Resource> {
-    return this.request<Resource>("GET", "/v1/disk/resources", { path })
+    const response = await this.request("PROPFIND", path, {
+      body: RESOURCE_PROPFIND,
+      headers: {
+        "Content-Type": "application/xml; charset=utf-8",
+        Depth: "0",
+      },
+    })
+    const xml = await response.text()
+    const resources = parseMultiStatus(xml, path)
+    return resources[0]
   }
 
-  async list(path: string, opts?: ListOptions): Promise<Resource> {
-    return this.request<Resource>("GET", "/v1/disk/resources", {
-      path,
-      limit: opts?.limit,
-      offset: opts?.offset,
-      sort: opts?.sort,
+  async list(path: string): Promise<Resource[]> {
+    const response = await this.request("PROPFIND", path, {
+      body: RESOURCE_PROPFIND,
+      headers: {
+        "Content-Type": "application/xml; charset=utf-8",
+        Depth: "1",
+      },
+    })
+    const xml = await response.text()
+    const resources = parseMultiStatus(xml, path)
+    // Depth:1 includes the folder itself as the first entry — skip it
+    return resources.slice(1)
+  }
+
+  async mkdir(path: string): Promise<void> {
+    await this.request("MKCOL", path)
+  }
+
+  async delete(path: string): Promise<void> {
+    await this.request("DELETE", path)
+  }
+
+  async copy(from: string, to: string, overwrite?: boolean): Promise<void> {
+    await this.request("COPY", from, {
+      headers: {
+        Destination: `${BASE_URL}${encodeDavPath(to)}`,
+        Overwrite: overwrite ? "T" : "F",
+      },
     })
   }
 
-  async mkdir(path: string): Promise<Link> {
-    return this.request<Link>("PUT", "/v1/disk/resources", { path })
-  }
-
-  async delete(path: string, permanently?: boolean): Promise<Link | undefined> {
-    return this.request<Link | undefined>("DELETE", "/v1/disk/resources", {
-      path,
-      permanently,
+  async move(from: string, to: string, overwrite?: boolean): Promise<void> {
+    await this.request("MOVE", from, {
+      headers: {
+        Destination: `${BASE_URL}${encodeDavPath(to)}`,
+        Overwrite: overwrite ? "T" : "F",
+      },
     })
-  }
-
-  async copy(from: string, to: string, overwrite?: boolean): Promise<Link> {
-    return this.request<Link>("POST", "/v1/disk/resources/copy", {
-      from,
-      path: to,
-      overwrite,
-    })
-  }
-
-  async move(from: string, to: string, overwrite?: boolean): Promise<Link> {
-    return this.request<Link>("POST", "/v1/disk/resources/move", {
-      from,
-      path: to,
-      overwrite,
-    })
-  }
-
-  // --- Upload ---
-
-  async getUploadUrl(path: string, overwrite?: boolean): Promise<string> {
-    const link = await this.request<Link>("GET", "/v1/disk/resources/upload", {
-      path,
-      overwrite,
-    })
-    return link.href
-  }
-
-  async upload(uploadUrl: string, file: string): Promise<void> {
-    const body = Bun.file(file)
-    const response = await fetch(uploadUrl, { method: "PUT", body })
-    if (!response.ok) {
-      throw new Error(`Upload failed: ${response.status} ${response.statusText}`)
-    }
-  }
-
-  // --- Download ---
-
-  async getDownloadUrl(path: string): Promise<string> {
-    const link = await this.request<Link>("GET", "/v1/disk/resources/download", {
-      path,
-    })
-    return link.href
-  }
-
-  async download(downloadUrl: string, dest: string): Promise<void> {
-    const response = await fetch(downloadUrl)
-    if (!response.ok) {
-      throw new Error(`Download failed: ${response.status} ${response.statusText}`)
-    }
-    await Bun.write(dest, response)
   }
 
   // --- Publish ---
 
-  async publish(path: string): Promise<Link> {
-    return this.request<Link>("PUT", "/v1/disk/resources/publish", { path })
+  async publish(path: string): Promise<string | undefined> {
+    const response = await this.request("PROPPATCH", path, {
+      body: PUBLISH_PROPPATCH,
+      headers: { "Content-Type": "application/xml; charset=utf-8" },
+    })
+    const xml = await response.text()
+    return parsePublicUrl(xml)
   }
 
-  async unpublish(path: string): Promise<Link> {
-    return this.request<Link>("PUT", "/v1/disk/resources/unpublish", { path })
+  async unpublish(path: string): Promise<void> {
+    await this.request("PROPPATCH", path, {
+      body: UNPUBLISH_PROPPATCH,
+      headers: { "Content-Type": "application/xml; charset=utf-8" },
+    })
   }
 
   async getPublicUrl(path: string): Promise<string | undefined> {
-    const resource = await this.stat(path)
-    return resource.public_url
+    const response = await this.request("PROPFIND", path, {
+      body: PUBLIC_URL_PROPFIND,
+      headers: {
+        "Content-Type": "application/xml; charset=utf-8",
+        Depth: "0",
+      },
+    })
+    const xml = await response.text()
+    return parsePublicUrl(xml)
   }
+
+  // --- Upload ---
+
+  async upload(remotePath: string, localFile: string): Promise<void> {
+    const body = Bun.file(localFile)
+    await this.request("PUT", remotePath, { body })
+  }
+
+  // --- Download ---
+
+  async download(remotePath: string, localDest: string): Promise<void> {
+    const response = await this.request("GET", remotePath)
+    await Bun.write(localDest, response)
+  }
+}
+
+function encodeDavPath(path: string): string {
+  return path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")
 }

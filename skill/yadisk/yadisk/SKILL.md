@@ -4,42 +4,43 @@ description: >
   Upload, download, and manage files on Yandex.Disk via the `yadisk` CLI or `@vforsh/yadisk` API.
   Use when the user wants to: (1) upload files to Yandex.Disk, (2) download files from Yandex.Disk,
   (3) list/browse Yandex.Disk contents, (4) create/delete/move/copy files or folders on Yandex.Disk,
-  (5) publish or unpublish resources, (6) check Yandex.Disk usage, (7) authenticate with Yandex.Disk OAuth.
+  (5) publish or unpublish resources, (6) check Yandex.Disk usage, (7) authenticate with Yandex.Disk.
 ---
 
 # yadisk
 
-Bun-based monorepo at `~/dev/yadisk/` for Yandex.Disk REST API. Two packages: `@vforsh/yadisk` (programmatic API) and `@vforsh/yadisk-cli` (CLI, globally linked as `yadisk`).
+Bun-based monorepo at `~/dev/yadisk/` for Yandex.Disk WebDAV API. Two packages: `@vforsh/yadisk` (programmatic API) and `@vforsh/yadisk-cli` (CLI, globally linked as `yadisk`).
 
 ## Auth
 
-Token resolution: `--token` flag → `YADISK_TOKEN` env → `~/.config/yadisk/token` file.
+Uses app passwords with Basic auth. Credentials resolution: `--username`/`--password` flags → `YADISK_USERNAME`/`YADISK_PASSWORD` env → `~/.config/yadisk/config.json` file.
 
 ```bash
-# First-time setup — opens OAuth URL, prompts for token, saves to ~/.config/yadisk/token
-yadisk auth --client-id <app-client-id>
+# First-time setup — prompts for username + app password, validates, saves to config
+yadisk auth
 
-# Or set env var
-export YADISK_TOKEN=<token>
+# Or set env vars
+export YADISK_USERNAME=user
+export YADISK_PASSWORD=app-password
 ```
 
 ## Commands
 
 ```bash
 yadisk info                                  # disk usage/capacity
-yadisk ls <path> [--limit N] [--sort X]      # list folder
+yadisk ls <path> [--sort name|size|modified]  # list folder
 yadisk stat <path>                           # file/folder metadata
 yadisk mkdir <path>                          # create folder
-yadisk upload <file> <dest> [--publish]      # upload; --publish prints public URL
+yadisk upload <file> [dest] [--publish]       # upload; --publish prints public URL
 yadisk download <path> [local-dest]          # download to local file
 yadisk cp <from> <to> [--overwrite]          # copy
 yadisk mv <from> <to> [--overwrite]          # move/rename
-yadisk rm <path> [--permanently]             # delete (default: to trash)
+yadisk rm <path>                             # delete
 yadisk publish <path>                        # make public, print URL
 yadisk unpublish <path>                      # remove public access
 ```
 
-Global flags: `--json` (raw JSON), `--token <t>` (override token).
+Global flags: `--json` (raw JSON), `--username <u>` / `--password <p>` (override credentials).
 
 ## Common Workflows
 
@@ -61,7 +62,7 @@ done
 ### Browse and download
 
 ```bash
-yadisk ls /uploads --limit 50 --sort -modified
+yadisk ls /uploads --sort -modified
 yadisk download /uploads/build.zip ./build.zip
 ```
 
@@ -70,21 +71,18 @@ yadisk download /uploads/build.zip ./build.zip
 Import `@vforsh/yadisk` in scripts or other packages:
 
 ```typescript
-import { YaDiskClient, getToken } from "@vforsh/yadisk"
+import { YaDiskClient, getCredentials } from "@vforsh/yadisk"
 
-const token = getToken()
-const client = new YaDiskClient(token)
+const credentials = getCredentials()
+const client = new YaDiskClient(credentials)
 
 // Upload and publish
-const url = await client.getUploadUrl("/uploads/build.zip", true)
-await client.upload(url, "./build.zip")
-await client.publish("/uploads/build.zip")
-const publicUrl = await client.getPublicUrl("/uploads/build.zip")
+await client.upload("/uploads/build.zip", "./build.zip")
+const url = await client.publish("/uploads/build.zip")
 
 // List folder
-const folder = await client.list("/uploads", { limit: 50, sort: "-modified" })
+const items = await client.list("/uploads")
 
 // Delete
 await client.delete("/uploads/old-build.zip")
 ```
-
