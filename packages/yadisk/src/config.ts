@@ -3,7 +3,7 @@ import { homedir } from "os"
 import { join } from "path"
 
 const CONFIG_DIR = join(homedir(), ".config", "yadisk")
-const CONFIG_FILE = join(CONFIG_DIR, "config.json")
+export const CONFIG_FILE = join(CONFIG_DIR, "config.json")
 
 export interface YaDiskConfig {
   username?: string

@@ -1,4 +1,4 @@
-import type { DiskInfo, Resource } from "@vforsh/yadisk"
+import type { DiskInfo, Resource, TrashItem } from "@vforsh/yadisk"
 
 // --- Size Formatting ---
 
@@ -62,11 +62,10 @@ export function formatDiskInfo(disk: DiskInfo): string {
   const free = formatSize(disk.available_bytes)
   const pct = ((disk.used_bytes / disk.total_bytes) * 100).toFixed(1)
 
-  return [
-    `Total:   ${total}`,
-    `Used:    ${used} (${pct}%)`,
-    `Free:    ${free}`,
-  ].join("\n")
+  const lines = [`Total:   ${total}`, `Used:    ${used} (${pct}%)`, `Free:    ${free}`]
+  if (disk.trash_bytes !== undefined) lines.push(`Trash:   ${formatSize(disk.trash_bytes)}`)
+  if (disk.max_file_size !== undefined) lines.push(`Max file: ${formatSize(disk.max_file_size)}`)
+  return lines.join("\n")
 }
 
 export function formatResourceList(items: Resource[]): string {
@@ -101,12 +100,29 @@ export function formatResource(resource: Resource): string {
   if (resource.size !== undefined) lines.push(`Size:     ${formatSize(resource.size)}`)
   lines.push(`Created:  ${formatDate(resource.created)}`)
   lines.push(`Modified: ${formatDate(resource.modified)}`)
-  if (resource.etag) lines.push(`ETag:     ${resource.etag}`)
+  if (resource.md5) lines.push(`MD5:      ${resource.md5}`)
+  if (resource.sha256) lines.push(`SHA256:   ${resource.sha256}`)
+  if (resource.public_url) lines.push(`Public:   ${resource.public_url}`)
   return lines.join("\n")
 }
 
-export function formatJson(data: unknown): string {
-  return JSON.stringify(data, null, 2)
+export function formatPathList(items: Resource[]): string {
+  if (items.length === 0) return "No matches."
+  return renderTable(items, [
+    { header: "Size", value: (r) => (r.size !== undefined ? formatSize(r.size) : "dir"), width: 10 },
+    { header: "Modified", value: (r) => formatDate(r.modified), width: 19 },
+    { header: "Path", value: "path" },
+  ])
+}
+
+export function formatTrashList(items: TrashItem[]): string {
+  if (items.length === 0) return "Trash is empty."
+  return renderTable(items, [
+    { header: "Deleted", value: (r) => formatDate(r.deleted), width: 19 },
+    { header: "Size", value: (r) => (r.size !== undefined ? formatSize(r.size) : "dir"), width: 10 },
+    { header: "Origin", value: "origin_path" },
+    { header: "Trash path", value: "path" },
+  ])
 }
 
 function formatDate(dateStr: string): string {

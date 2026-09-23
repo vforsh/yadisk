@@ -1,11 +1,26 @@
 import { XMLParser } from "fast-xml-parser"
+import { YaDiskError } from "./errors"
 import type { DiskInfo, Resource } from "./types"
 
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   removeNSPrefix: true,
+  // Keep values as strings: default coercion turns names like "2026" into numbers and all-digit md5 etags into floats.
+  parseTagValue: false,
 })
+
+function parseXml(xml: string): any {
+  try {
+    return parser.parse(xml)
+  } catch (err) {
+    throw invalidResponse(err instanceof Error ? err.message : String(err))
+  }
+}
+
+function invalidResponse(reason: string): YaDiskError {
+  return new YaDiskError("server", `Invalid WebDAV response: ${reason}`)
+}
 
 // --- PROPFIND request bodies ---
 
@@ -60,7 +75,7 @@ export const PUBLIC_URL_PROPFIND = `<?xml version="1.0" encoding="utf-8"?>
 // --- Parsers ---
 
 export function parseQuota(xml: string): DiskInfo {
-  const parsed = parser.parse(xml)
+  const parsed = parseXml(xml)
   const response = getResponse(parsed)
   const props = getPropstat(response).prop
 
@@ -75,9 +90,9 @@ export function parseQuota(xml: string): DiskInfo {
 }
 
 export function parseMultiStatus(xml: string, basePath: string): Resource[] {
-  const parsed = parser.parse(xml)
+  const parsed = parseXml(xml)
   const multistatus = parsed.multistatus
-  if (!multistatus) throw new Error("Invalid WebDAV response: no multistatus")
+  if (!multistatus) throw invalidResponse("no multistatus")
 
   const responses = Array.isArray(multistatus.response)
     ? multistatus.response
@@ -99,8 +114,8 @@ export function parseResource(response: any, basePath?: string): Resource {
     name,
     path: rawPath,
     type: isDir ? "dir" : "file",
-    created: props.creationdate ?? "",
-    modified: props.getlastmodified ?? "",
+    created: toIsoDate(props.creationdate),
+    modified: toIsoDate(props.getlastmodified),
   }
 
   if (!isDir && props.getcontentlength != null) {
@@ -113,13 +128,15 @@ export function parseResource(response: any, basePath?: string): Resource {
 
   if (props.getetag) {
     resource.etag = String(props.getetag).replace(/"/g, "")
+    // Yandex WebDAV ETags are the content md5.
+    if (!isDir && /^[0-9a-f]{32}$/i.test(resource.etag)) resource.md5 = resource.etag.toLowerCase()
   }
 
   return resource
 }
 
 export function parsePublicUrl(xml: string): string | undefined {
-  const parsed = parser.parse(xml)
+  const parsed = parseXml(xml)
   const response = getResponse(parsed)
   const propstat = getPropstat(response)
   const url = propstat?.prop?.public_url
@@ -129,14 +146,21 @@ export function parsePublicUrl(xml: string): string | undefined {
 
 // --- Helpers ---
 
+// WebDAV mixes ISO 8601 (creationdate) and RFC 1123 (getlastmodified); expose both as ISO 8601.
+function toIsoDate(value: unknown): string {
+  if (!value) return ""
+  const date = new Date(String(value))
+  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString()
+}
+
 function getResponse(parsed: any): any {
   const ms = parsed.multistatus
-  if (!ms) throw new Error("Invalid WebDAV response: no multistatus")
+  if (!ms) throw invalidResponse("no multistatus")
   return Array.isArray(ms.response) ? ms.response[0] : ms.response
 }
 
 function getPropstat(response: any): any {
-  if (!response) throw new Error("Invalid WebDAV response: no response element")
+  if (!response) throw invalidResponse("no response element")
   const propstat = response.propstat
   if (Array.isArray(propstat)) {
     return propstat.find((p: any) => {
