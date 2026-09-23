@@ -1,6 +1,7 @@
-import type { ClientOptions, Credentials, DiskInfo, Resource, WebDAVError } from "./types"
+import type { ClientOptions, Credentials, DiskInfo, Resource, UploadMethod, WebDAVError } from "./types"
 import { encodeBasicAuth } from "./auth"
 import { fetchWithTimeout } from "./http"
+import { restUpload } from "./rest"
 import {
   QUOTA_PROPFIND,
   RESOURCE_PROPFIND,
@@ -16,11 +17,18 @@ const BASE_URL = "https://webdav.yandex.ru"
 
 export class YaDiskClient {
   private authHeader: string
+  private token?: string
   private timeoutMs?: number
 
   constructor(credentials: Credentials, options?: ClientOptions) {
     this.authHeader = encodeBasicAuth(credentials)
+    this.token = credentials.token
     this.timeoutMs = options?.timeoutMs
+  }
+
+  /** REST when an OAuth token is set; WebDAV otherwise (throttled by Yandex to ~60s/MB). */
+  get uploadMethod(): UploadMethod {
+    return this.token ? "rest" : "webdav"
   }
 
   private async request(
@@ -162,7 +170,11 @@ export class YaDiskClient {
 
   async upload(remotePath: string, localFile: string): Promise<void> {
     const body = Bun.file(localFile)
-    await this.request("PUT", remotePath, { body })
+    if (this.token) {
+      await restUpload(this.token, remotePath, body, this.timeoutMs)
+    } else {
+      await this.request("PUT", remotePath, { body })
+    }
   }
 
   // --- Download ---

@@ -3,17 +3,22 @@
 export interface Credentials {
   username: string
   password: string
+  /** OAuth token (`cloud_api:disk.write`). Enables REST uploads, ~8× faster than throttled WebDAV. */
+  token?: string
 }
 
 export interface GetCredentialsOptions {
   username?: string
   password?: string
+  token?: string
 }
 
 export interface ClientOptions {
   /** Per-request timeout in ms. Omit or 0 to disable (Bun's implicit 5-min idle timeout is also disabled). */
   timeoutMs?: number
 }
+
+export type UploadMethod = "rest" | "webdav"
 
 export interface DiskInfo {
   used_bytes: number

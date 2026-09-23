@@ -11,6 +11,7 @@ import {
   setConfigValue,
   deleteConfigValue,
   isValidConfigKey,
+  verifyUploadToken,
 } from "@vforsh/yadisk"
 import type { Credentials, Resource } from "@vforsh/yadisk"
 import {
@@ -25,9 +26,11 @@ import { createInterface } from "readline"
 
 const program = new Command()
 
+const SECRET_KEYS = new Set(["password", "token"])
+
 function getClient(): YaDiskClient {
   const opts = program.opts()
-  const credentials = getCredentials({ username: opts.username, password: opts.password })
+  const credentials = getCredentials({ username: opts.username, password: opts.password, token: opts.token })
   return new YaDiskClient(credentials, { timeoutMs: getTimeoutMs() })
 }
 
@@ -40,6 +43,10 @@ function getTimeoutMs(): number | undefined {
     process.exit(1)
   }
   return seconds === 0 ? undefined : seconds * 1000
+}
+
+function displayValue(key: string, value: unknown): string {
+  return SECRET_KEYS.has(key) ? "***" : String(value)
 }
 
 function resolveUploadDest(file: string, dest?: string): string {
@@ -61,6 +68,7 @@ program
   .version("1.0.0")
   .option("--username <username>", "Yandex username (overrides env)")
   .option("--password <password>", "App password (overrides env)")
+  .option("--token <token>", "OAuth token for REST uploads (overrides env)")
   .option("--timeout <seconds>", "Per-request timeout in seconds (default: none)")
   .option("--json", "Output as JSON")
 
@@ -68,8 +76,15 @@ program
 
 program
   .command("auth")
-  .description("Authenticate with username and app password")
-  .action(async () => {
+  .description("Authenticate with username and app password, or save an OAuth token with --oauth")
+  .option("--oauth", "Save an OAuth token for fast REST uploads")
+  .option("--client-id <id>", "OAuth app client ID (prints the authorize URL)")
+  .action(async (options) => {
+    if (options.oauth) {
+      await authOAuth(options.clientId)
+      return
+    }
+
     const username = await prompt("Username: ")
     if (!username) {
       console.error("Error: No username provided.")
@@ -107,16 +122,16 @@ const configCmd = program
 configCmd
   .command("set")
   .description("Set a config value")
-  .argument("<key>", "Config key (username, password, upload_dir)")
+  .argument("<key>", "Config key (username, password, token, upload_dir)")
   .argument("<value>", "Config value")
   .action((key: string, value: string) => {
     if (!isValidConfigKey(key)) {
       console.error(`Unknown config key: ${key}`)
-      console.error("Valid keys: username, password, upload_dir")
+      console.error("Valid keys: username, password, token, upload_dir")
       process.exit(1)
     }
     setConfigValue(key, value)
-    console.log(`${key} = ${key === "password" ? "***" : value}`)
+    console.log(`${key} = ${displayValue(key, value)}`)
   })
 
 configCmd
@@ -130,7 +145,7 @@ configCmd
     }
     const value = getConfigValue(key)
     if (value !== undefined) {
-      console.log(key === "password" ? "***" : value)
+      console.log(displayValue(key, value))
     } else {
       console.error(`${key} is not set`)
       process.exit(1)
@@ -147,7 +162,7 @@ configCmd
       console.log("No config values set.")
     } else {
       for (const [key, value] of entries) {
-        console.log(`${key} = ${key === "password" ? "***" : value}`)
+        console.log(`${key} = ${displayValue(key, value)}`)
       }
     }
   })
@@ -245,7 +260,17 @@ program
     const resolvedDest = resolveUploadDest(file, dest)
     const fileObj = Bun.file(file)
     const size = fileObj.size
-    const spinner = ora(`Uploading ${basename(file)} (${formatSize(size)})...`).start()
+
+    if (client.uploadMethod === "webdav") {
+      console.error(
+        chalk.yellow(
+          "Warning: No OAuth token — uploading via WebDAV, which Yandex throttles to ~60s/MB.\n" +
+            "For fast uploads run: yadisk auth --oauth"
+        )
+      )
+    }
+
+    const spinner = ora(`Uploading ${basename(file)} (${formatSize(size)}) via ${client.uploadMethod}...`).start()
 
     try {
       await client.upload(resolvedDest, file)
@@ -353,6 +378,31 @@ program
   })
 
 // --- Helpers ---
+
+async function authOAuth(clientId?: string): Promise<void> {
+  if (clientId) {
+    const url = `https://oauth.yandex.ru/authorize?response_type=token&client_id=${clientId}`
+    console.log(`Open this URL, grant access, and copy the token:\n  ${url}\n`)
+  }
+
+  const token = await promptSecret("OAuth token: ")
+  if (!token) {
+    console.error("Error: No token provided.")
+    process.exit(1)
+  }
+
+  const spinner = ora("Validating token...").start()
+  try {
+    await verifyUploadToken(token, getTimeoutMs())
+    spinner.succeed("Token valid (cloud_api:disk.write)")
+  } catch (err) {
+    spinner.fail("Token validation failed")
+    throw err
+  }
+
+  setConfigValue("token", token)
+  console.log("Token saved to ~/.config/yadisk/config.json")
+}
 
 function prompt(message: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout })

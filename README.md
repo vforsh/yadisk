@@ -17,7 +17,7 @@ cd packages/cli && bun link
 
 ## Auth
 
-Uses [app passwords](https://id.yandex.ru/security/app-passwords) — no OAuth app registration needed.
+Uses [app passwords](https://id.yandex.ru/security/app-passwords) for everything. An optional OAuth token makes uploads fast (see step 3).
 
 ### 1. Create an app password
 
@@ -33,6 +33,21 @@ yadisk auth
 
 Prompts for username and app password → validates via WebDAV → saves to `~/.config/yadisk/config.json`.
 
+### 3. (Recommended) Add an OAuth token for fast uploads
+
+Yandex throttles WebDAV uploads to ~60 s per MB (the body is sent at full speed, then the server holds the response). Uploads through the REST API uploader hosts are ~8× faster per file and scale with parallel uploads. With a token configured, `upload` uses REST; everything else stays on WebDAV.
+
+1. Create an app at [oauth.yandex.com/client/new](https://oauth.yandex.com/client/new/): platform **Web services**, redirect URI `https://oauth.yandex.ru/verification_code`, permission **Yandex.Disk REST API → `cloud_api:disk.write`**.
+2. Run:
+
+```bash
+yadisk auth --oauth --client-id <client-id>
+```
+
+Prints the authorize URL → grant access → paste the token. It is validated (by requesting an upload link) and saved to `~/.config/yadisk/config.json` as `token`.
+
+Without a token, `upload` falls back to WebDAV and prints a warning.
+
 ### Credentials resolution
 
 First match wins:
@@ -40,6 +55,8 @@ First match wins:
 1. `--username` + `--password` flags
 2. `YADISK_USERNAME` + `YADISK_PASSWORD` env vars
 3. `~/.config/yadisk/config.json` file
+
+OAuth token (optional, uploads only): `--token` flag → `YADISK_TOKEN` env → `token` in config.
 
 ## Usage
 
@@ -57,7 +74,7 @@ yadisk publish <path>                        # make public, print URL
 yadisk unpublish <path>                      # remove public access
 ```
 
-Global flags: `--json` (raw JSON output), `--username`/`--password` (override auth), `--timeout <sec>` (per-request timeout; default none — Bun's implicit 5-min idle timeout is disabled so slow uploads don't die).
+Global flags: `--json` (raw JSON output), `--username`/`--password`/`--token` (override auth), `--timeout <sec>` (per-request timeout; default none — Bun's implicit 5-min idle timeout is disabled so slow uploads don't die).
 
 ## Programmatic Usage
 

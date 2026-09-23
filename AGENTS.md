@@ -30,8 +30,9 @@ Monorepo with two workspace packages under `packages/`.
 ### `packages/yadisk/` — `@vforsh/yadisk` (programmatic API)
 - **Entry**: `src/index.ts` — public API re-exports.
 - **Client**: `src/client.ts` — `YaDiskClient` class, typed wrapper over [Yandex.Disk WebDAV API](https://yandex.ru/dev/disk/doc/en/).
-- **Auth**: `src/auth.ts` — credential resolution chain (`--username`/`--password` → env → config file).
+- **Auth**: `src/auth.ts` — credential resolution chain (`--username`/`--password` → env → config file); optional OAuth token (`--token` → `YADISK_TOKEN` → config `token`).
 - **WebDAV**: `src/webdav.ts` — PROPFIND XML bodies, XML response parsers (fast-xml-parser).
+- **REST**: `src/rest.ts` — REST API upload (upload link → PUT to uploader host), token validation.
 - **HTTP**: `src/http.ts` — `fetchWithTimeout`: disables Bun's implicit 5-min idle timeout, optional `AbortSignal.timeout`.
 - **Types**: `src/types.ts` — `DiskInfo`, `Resource`, `Credentials`, `WebDAVError`.
 
@@ -59,8 +60,8 @@ Monorepo with two workspace packages under `packages/`.
 
 - **Auth header**: `Authorization: Basic base64(user:pass)` on all WebDAV calls.
 - **Base URL**: `https://webdav.yandex.ru` — lives in `packages/yadisk/src/client.ts`.
-- **Upload flow**: Single-step PUT to remote path. Yandex throttles WebDAV uploads: the body is sent at full speed, then the response is held ~60 s/MB.
+- **Upload flow**: With OAuth token → REST: `GET cloud-api.yandex.net/v1/disk/resources/upload?path=…&overwrite=true` → PUT body to returned `href` (no auth header); 202 → poll `/operations/{id}`. Without token → WebDAV single-step PUT (Yandex throttles: ~60 s/MB response hold; REST ~8 s/MB, scales with parallelism).
 - **Timeouts**: All requests go through `fetchWithTimeout` (`timeout: false`). Never call `fetch` directly — Bun's default 5-min idle timeout kills throttled uploads.
 - **Download flow**: Single-step GET from remote path.
-- **Global flags**: `--json`, `--username`, `--password`, and `--timeout` are on the root program, accessed via `program.opts()`.
+- **Global flags**: `--json`, `--username`, `--password`, `--token`, and `--timeout` are on the root program, accessed via `program.opts()`.
 - **Programmatic API**: `import { YaDiskClient, getCredentials } from "@vforsh/yadisk"` — use in scripts/other packages.

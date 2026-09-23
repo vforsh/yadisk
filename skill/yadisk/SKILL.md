@@ -15,9 +15,14 @@ Bun-based monorepo at `~/dev/yadisk/` for Yandex.Disk WebDAV API. Two packages: 
 
 Uses app passwords with Basic auth. Credentials resolution: `--username`/`--password` flags → `YADISK_USERNAME`/`YADISK_PASSWORD` env → `~/.config/yadisk/config.json` file.
 
+Optional OAuth token (`cloud_api:disk.write`) for uploads: `--token` → `YADISK_TOKEN` → `token` in config. With a token, `upload` uses the REST API (~8 s/MB, parallel uploads scale). Without one it falls back to WebDAV, which Yandex throttles to ~60 s/MB (warning printed). Always prefer having a token for anything beyond tiny files.
+
 ```bash
 # First-time setup — prompts for username + app password, validates, saves to config
 yadisk auth
+
+# Save OAuth token for fast uploads (prints authorize URL, validates, saves)
+yadisk auth --oauth --client-id <client-id>
 
 # Or set env vars
 export YADISK_USERNAME=user
@@ -40,7 +45,7 @@ yadisk publish <path>                        # make public, print URL
 yadisk unpublish <path>                      # remove public access
 ```
 
-Global flags: `--json` (raw JSON), `--username <u>` / `--password <p>` (override credentials), `--timeout <sec>` (per-request; default none).
+Global flags: `--json` (raw JSON), `--username <u>` / `--password <p>` / `--token <t>` (override credentials), `--timeout <sec>` (per-request; default none).
 
 Note: a timed-out upload may still land on disk (the body was already sent) — `stat` before retrying.
 
@@ -77,6 +82,7 @@ import { YaDiskClient, getCredentials } from "@vforsh/yadisk"
 
 const credentials = getCredentials()
 const client = new YaDiskClient(credentials, { timeoutMs: 600_000 }) // optional; default no timeout
+client.uploadMethod // "rest" when credentials.token is set, else "webdav"
 
 // Upload and publish
 await client.upload("/uploads/build.zip", "./build.zip")
