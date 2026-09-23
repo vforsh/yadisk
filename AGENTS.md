@@ -32,6 +32,7 @@ Monorepo with two workspace packages under `packages/`.
 - **Client**: `src/client.ts` — `YaDiskClient` class, typed wrapper over [Yandex.Disk WebDAV API](https://yandex.ru/dev/disk/doc/en/).
 - **Auth**: `src/auth.ts` — credential resolution chain (`--username`/`--password` → env → config file).
 - **WebDAV**: `src/webdav.ts` — PROPFIND XML bodies, XML response parsers (fast-xml-parser).
+- **HTTP**: `src/http.ts` — `fetchWithTimeout`: disables Bun's implicit 5-min idle timeout, optional `AbortSignal.timeout`.
 - **Types**: `src/types.ts` — `DiskInfo`, `Resource`, `Credentials`, `WebDAVError`.
 
 ### `packages/cli/` — `@vforsh/yadisk-cli`
@@ -58,7 +59,8 @@ Monorepo with two workspace packages under `packages/`.
 
 - **Auth header**: `Authorization: Basic base64(user:pass)` on all WebDAV calls.
 - **Base URL**: `https://webdav.yandex.ru` — lives in `packages/yadisk/src/client.ts`.
-- **Upload flow**: Single-step PUT to remote path.
+- **Upload flow**: Single-step PUT to remote path. Yandex throttles WebDAV uploads: the body is sent at full speed, then the response is held ~60 s/MB.
+- **Timeouts**: All requests go through `fetchWithTimeout` (`timeout: false`). Never call `fetch` directly — Bun's default 5-min idle timeout kills throttled uploads.
 - **Download flow**: Single-step GET from remote path.
-- **Global flags**: `--json`, `--username`, and `--password` are on the root program, accessed via `program.opts()`.
+- **Global flags**: `--json`, `--username`, `--password`, and `--timeout` are on the root program, accessed via `program.opts()`.
 - **Programmatic API**: `import { YaDiskClient, getCredentials } from "@vforsh/yadisk"` — use in scripts/other packages.

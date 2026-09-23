@@ -28,7 +28,18 @@ const program = new Command()
 function getClient(): YaDiskClient {
   const opts = program.opts()
   const credentials = getCredentials({ username: opts.username, password: opts.password })
-  return new YaDiskClient(credentials)
+  return new YaDiskClient(credentials, { timeoutMs: getTimeoutMs() })
+}
+
+function getTimeoutMs(): number | undefined {
+  const raw = program.opts().timeout
+  if (raw === undefined) return undefined
+  const seconds = Number(raw)
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    console.error(`Error: Invalid --timeout: ${raw} (expected seconds, 0 = no timeout)`)
+    process.exit(1)
+  }
+  return seconds === 0 ? undefined : seconds * 1000
 }
 
 function resolveUploadDest(file: string, dest?: string): string {
@@ -50,6 +61,7 @@ program
   .version("1.0.0")
   .option("--username <username>", "Yandex username (overrides env)")
   .option("--password <password>", "App password (overrides env)")
+  .option("--timeout <seconds>", "Per-request timeout in seconds (default: none)")
   .option("--json", "Output as JSON")
 
 // --- yadisk auth ---

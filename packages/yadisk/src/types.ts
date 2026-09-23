@@ -10,6 +10,11 @@ export interface GetCredentialsOptions {
   password?: string
 }
 
+export interface ClientOptions {
+  /** Per-request timeout in ms. Omit or 0 to disable (Bun's implicit 5-min idle timeout is also disabled). */
+  timeoutMs?: number
+}
+
 export interface DiskInfo {
   used_bytes: number
   available_bytes: number

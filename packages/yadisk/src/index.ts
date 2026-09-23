@@ -8,4 +8,11 @@ export {
   isValidConfigKey,
 } from "./config"
 export type { YaDiskConfig } from "./config"
-export type { DiskInfo, Resource, Credentials, GetCredentialsOptions, WebDAVError } from "./types"
+export type {
+  ClientOptions,
+  Credentials,
+  DiskInfo,
+  GetCredentialsOptions,
+  Resource,
+  WebDAVError,
+} from "./types"

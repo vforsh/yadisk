@@ -40,7 +40,9 @@ yadisk publish <path>                        # make public, print URL
 yadisk unpublish <path>                      # remove public access
 ```
 
-Global flags: `--json` (raw JSON), `--username <u>` / `--password <p>` (override credentials).
+Global flags: `--json` (raw JSON), `--username <u>` / `--password <p>` (override credentials), `--timeout <sec>` (per-request; default none).
+
+Note: a timed-out upload may still land on disk (the body was already sent) — `stat` before retrying.
 
 ## Common Workflows
 
@@ -74,7 +76,7 @@ Import `@vforsh/yadisk` in scripts or other packages:
 import { YaDiskClient, getCredentials } from "@vforsh/yadisk"
 
 const credentials = getCredentials()
-const client = new YaDiskClient(credentials)
+const client = new YaDiskClient(credentials, { timeoutMs: 600_000 }) // optional; default no timeout
 
 // Upload and publish
 await client.upload("/uploads/build.zip", "./build.zip")

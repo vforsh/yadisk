@@ -57,7 +57,7 @@ yadisk publish <path>                        # make public, print URL
 yadisk unpublish <path>                      # remove public access
 ```
 
-Global flags: `--json` (raw JSON output), `--username`/`--password` (override auth).
+Global flags: `--json` (raw JSON output), `--username`/`--password` (override auth), `--timeout <sec>` (per-request timeout; default none — Bun's implicit 5-min idle timeout is disabled so slow uploads don't die).
 
 ## Programmatic Usage
 

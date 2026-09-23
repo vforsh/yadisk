@@ -1,5 +1,6 @@
-import type { Credentials, DiskInfo, Resource, WebDAVError } from "./types"
+import type { ClientOptions, Credentials, DiskInfo, Resource, WebDAVError } from "./types"
 import { encodeBasicAuth } from "./auth"
+import { fetchWithTimeout } from "./http"
 import {
   QUOTA_PROPFIND,
   RESOURCE_PROPFIND,
@@ -15,9 +16,11 @@ const BASE_URL = "https://webdav.yandex.ru"
 
 export class YaDiskClient {
   private authHeader: string
+  private timeoutMs?: number
 
-  constructor(credentials: Credentials) {
+  constructor(credentials: Credentials, options?: ClientOptions) {
     this.authHeader = encodeBasicAuth(credentials)
+    this.timeoutMs = options?.timeoutMs
   }
 
   private async request(
@@ -36,11 +39,7 @@ export class YaDiskClient {
       ...options?.headers,
     }
 
-    const response = await fetch(url, {
-      method,
-      headers,
-      body: options?.body,
-    })
+    const response = await fetchWithTimeout(url, { method, headers, body: options?.body }, this.timeoutMs)
 
     if (!response.ok) {
       const err: WebDAVError = {
