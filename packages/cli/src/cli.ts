@@ -358,20 +358,23 @@ function promptSecret(message: string): Promise<string> {
     const rl = createInterface({ input: process.stdin, terminal: false })
     process.stdin.setRawMode?.(true)
     let input = ""
-    const onData = (ch: Buffer) => {
-      const c = ch.toString()
-      if (c === "\n" || c === "\r") {
-        process.stdin.setRawMode?.(false)
-        process.stdin.removeListener("data", onData)
-        rl.close()
-        process.stdout.write("\n")
-        resolve(input.trim())
-      } else if (c === "\x7f" || c === "\b") {
-        input = input.slice(0, -1)
-      } else if (c === "\x03") {
-        process.exit(130)
-      } else {
-        input += c
+    // Iterate per char: pasted or piped input arrives as a single multi-char chunk.
+    const onData = (chunk: Buffer) => {
+      for (const c of chunk.toString()) {
+        if (c === "\n" || c === "\r") {
+          process.stdin.setRawMode?.(false)
+          process.stdin.removeListener("data", onData)
+          rl.close()
+          process.stdout.write("\n")
+          resolve(input.trim())
+          return
+        } else if (c === "\x7f" || c === "\b") {
+          input = input.slice(0, -1)
+        } else if (c === "\x03") {
+          process.exit(130)
+        } else {
+          input += c
+        }
       }
     }
     process.stdin.on("data", onData)
