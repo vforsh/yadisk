@@ -4,6 +4,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "typecheck": "tsc --build",
+    "test": "bun test",
     "publish": "./scripts/publish.sh"
   },
   "devDependencies": {
