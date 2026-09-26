@@ -30,7 +30,8 @@ Monorepo with two workspace packages under `packages/`.
 
 ### `packages/yadisk/` — `@vforsh/yadisk` (programmatic API)
 - **Entry**: `src/index.ts` — public API re-exports.
-- **Client**: `src/client.ts` — `YaDiskClient`: picks a backend (REST with a token, WebDAV otherwise, REST→WebDAV fallback on `auth` errors), path normalization, conflict explanations (missing parent / exists / folder target), upload limits + verification, pagination, trash, download targets.
+- **Client**: `src/client.ts` — `YaDiskClient`: picks a backend (REST with a token, WebDAV otherwise, REST→WebDAV fallback on `auth` errors), path normalization, conflict explanations (missing parent / exists / folder target; builders in `src/client-errors.ts`), `mkdir -p`, the non-empty-folder delete guard, dry runs, upload limits + verification, pagination, trash, download targets, `open` (streamed reads).
+- **Sorting**: `src/sort.ts` — local equivalent of the REST `sort` param (WebDAV lists).
 - **Backend contract**: `src/backend.ts` — `Backend` interface both transports implement; normalized paths in, shared error codes out.
 - **WebDAV backend**: `src/dav.ts` (`DavBackend`) + `src/webdav.ts` (PROPFIND/PROPPATCH bodies, XML parsers).
 - **REST backend**: `src/rest.ts` (`RestBackend`, REST-only extras: `uploadFromUrl`, `files`, `trashList`, `trashRestore`; `checkToken`) + `src/rest-api.ts` (`RestApi`: JSON calls, Yandex error-name → code mapping, 202 operation polling, pre-signed link follow).
@@ -39,15 +40,18 @@ Monorepo with two workspace packages under `packages/`.
 - **Errors**: `src/errors.ts` — `YaDiskError { code, status, hint }`, HTTP status → code mapping.
 - **Paths**: `src/path.ts` — `normalizePath` (leading `/`, strips `disk:`, collapses `//`, rejects empty and `.`/`..` — URL parsing would collapse them, so WebDAV `/.` hits the root). `refuseRoot` guards delete/copy/move/publish.
 - **Local files**: `src/local.ts` — local file checks, streaming md5, download target resolution, safe writes.
-- **Auth**: `src/auth.ts` — token (`--token` → `YADISK_TOKEN` → config) and app password (flags → env → config) resolve independently; either is enough.
+- **Auth**: `src/auth.ts` — token (`--token` → `YADISK_TOKEN` → config) and app password (flags → env → config) resolve independently; either is enough. `resolveCredentials` also reports each one's source.
 - **HTTP**: `src/http.ts` — `fetchWithTimeout`: disables Bun's implicit 5-min idle timeout, optional `AbortSignal.timeout`, maps transport failures to `network`/`timeout`. `withRetry` for retryable errors.
 - **Types**: `src/types.ts` — `DiskInfo`, `Resource`, `TrashItem`, `Credentials`, `ClientOptions`, `ListOptions`, `FindOptions`, `UploadOptions`, `UploadResult`, `DownloadResult`.
 
 ### `packages/cli/` — `@vforsh/yadisk-cli`
 - **Entrypoint**: `src/cli.ts` — root program, global flags, help epilogue (exit codes), error handler, `#!/usr/bin/env bun`.
-- **Commands**: `src/commands/{auth,config,files,transfer,rest-only}.ts` — each exports a `register*(program)`; `rest-only` holds `find`, `trash`, `public`. Every command with non-trivial usage gets `.addHelpText("after", examples([...]))`.
-- **Context**: `src/context.ts` — shared `program`, `getClient()`/`getClientOptions()` (timeout/retries/warnings from global flags), `parseCount`, `examples`.
-- **Output**: `src/output.ts` — `emit` (stdout result, JSON or human), `warn`/`note` (stderr), `handleError`, `EXIT_CODES`.
+- **Commands**: `src/commands/{auth,config,files,upload,transfer,rest-only,jobs}.ts` — each exports a `register*(program)`; `auth` also holds `status`; `transfer` holds `upload-url`, `download`, `cat`; `rest-only` holds `find`, `trash`, `public`. Every command with non-trivial usage gets `.addHelpText("after", examples([...]))`.
+- **Context**: `src/context.ts` — shared `program`, `getClient()`/`getClientOptions()` (timeout/retries/warnings from global flags), `parseCount`, `examples`, shared options (`fieldsOption`, `sortOption`, `dryRunOption`).
+- **Output**: `src/output.ts` — `emit` (stdout result, JSON or human), `emitWithFailures` (batch results), `pick` (`--fields`), `warn`/`note` (stderr), `handleError`, `EXIT_CODES`, `EXIT_RUNNING`.
+- **Batch**: `src/batch.ts` — `mapSettled` (bounded concurrency, per-item outcomes) for multi-path `stat` and uploads.
+- **Upload planning**: `src/upload-plan.ts` — sources + destination → `{files, dirs, batch}` (cp-like argument rules, `-r` tree walk).
+- **Jobs**: `src/jobs.ts` — `--detach` (`detachable` action wrapper), job files, `readJob`/`waitForJob`, child-side `recordJobExit`.
 - **Progress**: `src/progress.ts` — spinner on TTY; label + 15 s heartbeat on stderr otherwise.
 - **Prompts**: `src/prompts.ts` — single shared stdin line reader (TTY raw mode for secrets, piped input, EOF → usage error).
 - **Formatters**: `src/format.ts` — table renderer, human-readable output for `ls`, `info`, `stat`.
@@ -83,7 +87,11 @@ Monorepo with two workspace packages under `packages/`.
 - **Retries**: Only `network`, `rate_limited` (429, honors `Retry-After` up to 30 s, beyond that fails fast) and `server` (5xx). WebDAV: GET/PROPFIND/PUT/PROPPATCH. REST: GET, publish/unpublish, and the whole upload. Never MKCOL/DELETE/COPY/MOVE/POST. Timeouts are never retried.
 - **Download flow**: `stat` first; files stream to disk, folders download as zip (REST `/resources/download` returns an archive link). WebDAV GET on a folder → 415 → `is_a_directory`.
 - **Overwrite**: `cp`/`mv --overwrite` onto an existing folder is refused before the request (it would replace the whole folder).
-- **Output contract**: stdout = result (one JSON value with `--json`, including `{"error":{…}}` on failure); stderr = warnings/progress/prompts. Library code never prints or calls `process.exit` — throw `YaDiskError`, report non-fatal notices via `ClientOptions.onWarning`.
+- **Listing order**: `--sort` is applied before `limit`/`offset` — REST `sort` param; WebDAV sorts the whole PROPFIND. Never sort a fetched page client-side.
+- **Delete guard**: `delete` stats first; a non-empty folder needs `recursive`. `dryRun` (rm/cp/mv/trash restore) runs the same checks and changes nothing.
+- **Parents**: `mkdir {parents}` treats an existing folder as success. `upload`/`uploadFromUrl {parents}` retry once after `mkdir -p` on a conflict — without an "exists?" pre-check, since a concurrent upload may have just created the folder.
+- **Jobs**: `--detach` re-runs the argv (minus `--detach`, plus `--json`) with `Bun.spawn({detached})`; stdout/stderr go to `~/.local/state/yadisk/jobs/<id>/`, the child writes `exit.json` from an `exit` handler (signals → 128+n). `job` exits with the command's own code, 9 while running, 1 for lost/killed jobs. Credential flags move to the child's env (never argv/`job.json`); job folders are 0700.
+- **Output contract**: stdout = result (one JSON value with `--json`, including `{"error":{…}}` on failure; compact when not a TTY; multi-input commands print an array of per-item results with `{…, error}` entries and exit with the first failure's code); stderr = warnings/progress/prompts. Library code never prints or calls `process.exit` — throw `YaDiskError`, report non-fatal notices via `ClientOptions.onWarning`.
 - **Exit codes**: `packages/cli/src/output.ts` `EXIT_CODES` — keep in sync with the help epilogue in `cli.ts`, README and `skill/yadisk/SKILL.md`.
 - **Global flags**: `--json`, `--username`, `--password`, `--token`, `--timeout`, and `--retries` are on the root program, accessed via `program.opts()`.
 - **Programmatic API**: `import { YaDiskClient, PublicClient, getCredentials } from "@vforsh/yadisk"` — use in scripts/other packages.

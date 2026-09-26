@@ -14,7 +14,10 @@ CLI (`yadisk`) and TypeScript API (`@vforsh/yadisk`) for Yandex.Disk.
 
 ## Agent contract
 
-- **Always pass `--json`.** stdout carries exactly one JSON value: the result, or `{"error":{"code","message","hint","status"}}`. stderr carries warnings, progress and retries only. Don't merge the two streams (`2>&1`) before parsing.
+- **Start with `yadisk status --json`** when unsure about auth: it reports the backend, login, and which credentials work (exit 3 if none do).
+- **Always pass `--json`.** stdout carries exactly one JSON value: the result, or `{"error":{"code","message","hint","status"}}`. stderr carries warnings, progress and retries only. Don't merge the two streams (`2>&1`) before parsing. JSON is compact when piped.
+- **Trim output with `--fields`** on `ls`, `stat`, `find`, `trash ls`, `public stat|ls`, e.g. `--fields path,type,size,modified`. That is about 3× fewer tokens than full resources.
+- **Several inputs → an array.** `stat a b` and multi-file/`-r` uploads print one entry per item (a glob matching one file gives the single-file object); failed items are `{path, error}` (uploads add `local_path`), and the exit code is the first failure's.
 - **Branch on exit codes, not text:**
 
 | Exit | Meaning | Error codes |
@@ -28,11 +31,14 @@ CLI (`yadisk`) and TypeScript API (`@vforsh/yadisk`) for Yandex.Disk.
 | 6 | transient: retry later | `network`, `timeout`, `rate_limited`, `server` |
 | 7 | disk full / file too large | `quota` |
 | 8 | upload landed but content mismatched | `verify_failed` |
+| 9 | `yadisk job`: the job is still running — ask again | — |
 
-- **Act on the `hint`.** It is usually the exact next command, e.g. `Create it first: yadisk mkdir /a`.
+- **Act on the `hint`.** It is usually the exact next command, e.g. `Create it first: yadisk mkdir -p /a`.
 - **Check whether something exists:** `yadisk stat <path> --json` exits 4 when it's missing.
 - **Paths:** `uploads/x`, `/uploads/x`, and `disk:/uploads/x` all mean the same thing. A trailing `/` on the destination of `upload`/`cp`/`mv`/`upload-url`/`download` means "into this folder". Empty paths and `.`/`..` segments are rejected (exit 2), and `rm`/`cp`/`mv`/`publish` refuse to act on the disk root.
 - **`--overwrite` replaces files only.** A destination that is an existing folder fails with `is_a_directory` and a trailing-slash hint; don't force it.
+- **Retry-safe variants:** `mkdir -p` (existing folder → `created: false`, exit 0), `upload -p` / `upload-url -p` (create missing parents), `upload --skip-if-same`, `download --skip-if-same`, `rm -f` (missing → `existed: false`, exit 0).
+- **Deleting a folder:** `rm` refuses a non-empty folder (exit 5) unless you pass `-r`. Check first with `--dry-run`, which `rm`, `cp`, `mv` and `trash restore` all accept: it runs the same checks, changes nothing, and adds `dry_run: true`.
 - `yadisk <command> --help` shows examples for that command.
 
 ## Backends
@@ -51,35 +57,43 @@ CLI (`yadisk`) and TypeScript API (`@vforsh/yadisk`) for Yandex.Disk.
 Yandex holds each upload response open server-side for a while. The CLI prints an estimate on stderr before it starts, e.g. `Uploading x.zip (50.0 MB) via rest — est ~6m42s`.
 
 - With a token (REST) uploads take about **8 s/MB**. Without one (WebDAV) they take about **60 s/MB**, and a warning is printed.
-- A typical agent shell tool times out around 2 min. **For files over ~10 MB (REST) or ~1 MB (WebDAV), run the upload in the background.** A heartbeat line goes to stderr every 15 s.
+- A typical agent shell tool times out around 2 min. **For files over ~10 MB (REST) or ~1 MB (WebDAV), pass `--detach`.** It prints `{job_id, …}` right away and runs the upload in the background. Then call `yadisk job <id> --wait 100 --json` until the exit code isn't 9. Once done, the job report's `result` or `error` is the command's own output and the exit code is the command's own. `download`, `upload-url`, `find` and `public download` take `--detach` too.
 - **Remote source?** `yadisk upload-url <url> <dest>` makes Yandex fetch the file itself, so nothing passes through this machine.
 - Uploads are verified afterwards. `verified: true` means the remote size and md5 match; `false` means verification was skipped or the server exposed no md5. A mismatch exits 8.
 - **Retrying is safe:** `--skip-if-same` skips the upload only when the remote size **and** md5 match. Always pass it when re-running after a timeout or crash.
-- Network errors, 429 and 5xx are retried automatically (`--retries <n>`, default 2), but only for reads, uploads and publish. `mkdir`/`rm`/`cp`/`mv` are never retried, so after exit 6 run `stat` first to see whether they took effect. Timeouts are not retried. A `Retry-After` over 30 s fails immediately and the wait appears in the hint.
+- Network errors, 429 and 5xx are retried automatically (`--retries <n>`, default 2), but only for reads, uploads and publish. `mkdir`/`rm`/`cp`/`mv` are never retried, so after exit 6 run `stat` first to see whether they took effect, or re-run the idempotent form (`mkdir -p`, `rm -f`). Timeouts are not retried. A `Retry-After` over 30 s fails immediately and the wait appears in the hint.
 
 ## Commands
 
 ```bash
-yadisk info                                    # {used_bytes, available_bytes, total_bytes, trash_bytes?, max_file_size?}
-yadisk ls [path] [--sort name|size|modified] [--limit n] [--offset n]
-                                               # array of resources; prefix sort with - for desc; default path /
-yadisk stat <path>                             # {name, path, type, size, created, modified, md5, sha256?, content_type, media_type?, public_url?}
-yadisk find [path] [--name glob] [--type file|dir] [--max-depth n] [--limit n] [--media-type t]
-yadisk mkdir <path>                            # {path, created}; exit 5 if it exists or parent is missing
-yadisk upload <file> [dest] [--publish] [--skip-if-same] [--no-verify]
-                                               # {path, size, md5, method, skipped, verified, public_url?, duration_ms}
-yadisk upload-url <url> <dest>                 # {url, ...resource}; REST
-yadisk download <path> [local-dest]            # {path, local_path, size, archive}; folders → .zip (REST)
-yadisk cp <from> <to> [--overwrite]            # {from, to, copied}; `to` = resolved destination
-yadisk mv <from> <to> [--overwrite]            # {from, to, moved}
-yadisk rm <path>                               # {path, deleted, trashed}; refuses /
-yadisk trash ls [--origin path] [--limit n]    # newest first: [{name, path: "trash:/…", type, size, origin_path, deleted}]
-yadisk trash restore <trash-path> [--name n] [--overwrite]   # {trash_path, path, restored}
+yadisk status                                  # {ready, backend, login, token, app_password, fallback}; alias whoami
+yadisk info                                    # {used_bytes, available_bytes, total_bytes, trash_bytes?, max_file_size?, login?}
+yadisk ls [path] [--sort [-]name|size|created|modified] [--limit n] [--offset n] [--fields …]
+                                               # array of resources; sorted before limit/offset; default path /
+yadisk stat <path...> [--fields …]             # {name, path, type, size, created, modified, md5, sha256?, content_type, media_type?, public_url?}
+yadisk find [path] [--name glob] [--type file|dir] [--max-depth n] [--limit n] [--media-type t] [--fields …]
+yadisk mkdir <path> [-p]                       # {path, created}; without -p exit 5 if it exists or parent is missing
+yadisk upload <file> [dest] [--publish] [--skip-if-same] [--no-verify] [-p]
+                                               # {local_path, path, size, md5, method, skipped, verified, public_url?, duration_ms}
+yadisk upload <files/folders...> <dest-folder> [-r] [-p] [--concurrency n]   # array, one entry per file (one plain file → object)
+yadisk upload - <dest>                         # stdin → file
+yadisk upload-url <url> <dest> [-p]            # {url, ...resource}; REST
+yadisk download <path> [local-dest] [--skip-if-same]   # {path, local_path, size, archive, skipped}; folders → .zip (REST)
+yadisk cat <path> [--max-bytes n]              # raw bytes; --json: {path, size, encoding: utf8|base64, content}; default cap 1 MiB
+yadisk cp <from> <to> [--overwrite] [--dry-run]   # {from, to, copied}; `to` = resolved destination
+yadisk mv <from> <to> [--overwrite] [--dry-run]   # {from, to, moved}
+yadisk rm <path> [-r] [-f] [--dry-run]         # {path, existed, deleted, type, trashed}; refuses / and non-empty folders without -r
+yadisk trash ls [--origin path] [--limit n] [--fields …]   # newest first: [{name, path: "trash:/…", type, size, origin_path, deleted}]
+yadisk trash restore <trash-path> [--name n] [--overwrite] [--dry-run]   # {trash_path, path, restored}
 yadisk publish <path>                          # {path, public_url}
 yadisk unpublish <path>                        # {path, published: false}
 yadisk public stat|ls|download <url> [--path p]   # anyone's public link, no credentials
+yadisk job <id> [--wait sec]                   # {job_id, status: running|done|failed|lost, result?, error?, progress?, log}
+yadisk jobs                                    # background jobs, newest first (kept 7 days)
 yadisk config get|set|list|unset               # keys: username, password, token, upload_dir
 ```
+
+`upload` arguments work like `cp`. With one file, `dest` is the exact remote path, or a folder if it ends in `/`. With several sources, the last argument is the destination folder. `upload -r ./site /www/site` puts `./site/**` at `/www/site/**`; `upload -r ./site /www/` puts it at `/www/site/**`.
 
 Global flags: `--json`, `--timeout <sec>` (per request; default none), `--retries <n>`, `--username`/`--password`/`--token`. Prefer env vars over the credential flags so secrets stay out of argv.
 
@@ -114,11 +128,23 @@ yadisk trash restore "trash:/old.zip_1f2e…" --json      # → {path: "/release
 # Upload + publish, then read the URL
 yadisk upload ./build.zip /releases/ --publish --json | jq -r .public_url
 
-# Idempotent upload (safe to re-run)
-yadisk upload ./build.zip /releases/build.zip --skip-if-same --json
+# Idempotent upload into a folder that may not exist yet (safe to re-run)
+yadisk upload ./build.zip /releases/2026/ -p --skip-if-same --json
 
-# Parent folder missing → exit 5 with hint; create it and retry
-yadisk mkdir /releases/2026 --json; yadisk upload ./build.zip /releases/2026/ --json
+# Several files / a whole folder
+yadisk upload dist/*.zip /releases/2026/ -p --skip-if-same --json | jq -c 'if type == "array" then .[] else . end | select(.error)'
+yadisk upload -r ./site /www/site --skip-if-same --json
+
+# Big upload without hitting the tool timeout
+yadisk upload ./big.iso /isos/ --skip-if-same --detach --json   # → {"job_id":"1f2e3d4c",…}
+yadisk job 1f2e3d4c --wait 100 --json                             # exit 9 = still running, repeat
+
+# The 5 newest files in a folder
+yadisk ls /releases --sort -modified --limit 5 --fields path,size,modified --json
+
+# Read / write a small text file
+yadisk cat /notes/todo.md
+echo "- ship it" | yadisk upload - /notes/todo.md --json
 
 # Grab a whole folder
 yadisk download /releases/2026 ./out/ --json             # → ./out/2026.zip
@@ -135,10 +161,14 @@ import { PublicClient, YaDiskClient, getCredentials, isYaDiskError } from "@vfor
 
 const client = new YaDiskClient(getCredentials(), { timeoutMs: 600_000, retries: 2 })
 client.backend // "rest" | "webdav"
-const result = await client.upload("/uploads/build.zip", "./build.zip", { skipIfSame: true })
+const result = await client.upload("/uploads/build.zip", "./build.zip", { skipIfSame: true, parents: true })
 const url = await client.publish(result.path)
+const newest = await client.list("/uploads", { sort: "-modified", limit: 5 })
 const zips = await client.find("/uploads", { name: "*.zip" })
-const { trashed } = await client.delete("/uploads/old.zip")
+await client.mkdir("/uploads/2026/09", { parents: true }) // false when it already existed
+await client.move("/uploads/a.zip", "/archive/", { dryRun: true }) // checks only
+const { trashed } = await client.delete("/uploads/old.zip") // { recursive: true } for a non-empty folder
+const { resource, body } = await client.open("/notes/todo.md", { maxBytes: 1 << 20 })
 const [item] = await client.trashList({ origin: "/uploads/old.zip", limit: 1 })
 await client.trashRestore(item.path)
 
