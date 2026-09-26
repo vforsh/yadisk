@@ -1,4 +1,4 @@
-import type { BackendKind, DiskInfo, Resource } from "./types"
+import type { BackendKind, DiskInfo, ListSort, Resource } from "./types"
 
 export interface ListPage {
   self: Resource
@@ -15,7 +15,7 @@ export interface Backend {
   readonly kind: BackendKind
   info(): Promise<DiskInfo>
   stat(path: string): Promise<Resource>
-  list(path: string, limit: number, offset: number): Promise<ListPage>
+  list(path: string, limit: number, offset: number, sort?: ListSort): Promise<ListPage>
   mkdir(path: string): Promise<void>
   /** Returns true when the resource went to the trash, undefined when the transport can't tell. */
   delete(path: string): Promise<boolean | undefined>

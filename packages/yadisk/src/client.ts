@@ -1,22 +1,30 @@
 import type { Backend } from "./backend"
 import { encodeBasicAuth } from "./auth"
 import { DavBackend } from "./dav"
+import { destinationExists, folderTarget, missingParent, sourceNotFound } from "./client-errors"
 import { YaDiskError, isYaDiskError } from "./errors"
 import { find } from "./find"
 import { withRetry, withRetryDefaults, type RetryOptions } from "./http"
-import { localFileSize, md5File, resolveLocalTarget, writeLocal } from "./local"
+import { localFileSize, md5File, resolveLocalTarget, sameLocalFile, writeLocal } from "./local"
 import { basenamePath, normalizePath, parentPath, refuseRoot } from "./path"
 import { RestBackend } from "./rest"
 import type {
   BackendKind,
   ClientOptions,
   Credentials,
+  DeleteOptions,
+  DeleteResult,
   DiskInfo,
+  DownloadOptions,
   DownloadResult,
   FindOptions,
   ListOptions,
+  MkdirOptions,
+  OpenOptions,
   Resource,
+  TransferOptions,
   TrashItem,
+  TrashRestoreOptions,
   UploadOptions,
   UploadResult,
 } from "./types"
@@ -77,7 +85,7 @@ export class YaDiskClient {
     let offset = options?.offset ?? 0
     const items: Resource[] = []
     while (items.length < limit) {
-      const page = await this.run((b) => b.list(normalized, Math.min(PAGE_SIZE, limit - items.length), offset))
+      const page = await this.run((b) => b.list(normalized, Math.min(PAGE_SIZE, limit - items.length), offset, options?.sort))
       if (page.self.type === "file") {
         throw new YaDiskError("not_a_directory", `Not a directory: ${normalized}`, {
           hint: `It is a file — use: yadisk stat ${normalized}`,
@@ -111,39 +119,68 @@ export class YaDiskClient {
     })
   }
 
-  async mkdir(path: string): Promise<void> {
+  /** Returns true when the folder was created, false when `parents` found it already there. */
+  async mkdir(path: string, options?: MkdirOptions): Promise<boolean> {
     const normalized = normalizePath(path)
     try {
       await this.run((b) => b.mkdir(normalized))
+      return true
     } catch (err) {
-      if (!isYaDiskError(err, "conflict")) throw err
-      if (await this.exists(normalized)) {
-        throw new YaDiskError("already_exists", `Already exists: ${normalized}`, { status: err.status })
+      if (!isYaDiskError(err, "conflict") && !isYaDiskError(err, "already_exists")) throw err
+      const existing = await this.statIfExists(normalized)
+      if (existing?.type === "dir" && options?.parents) return false
+      if (existing) {
+        throw new YaDiskError("already_exists", `Already exists: ${normalized}`, {
+          status: err.status,
+          hint: existing.type === "dir" ? "Pass --parents (-p) to accept an existing folder" : "A file has that name",
+        })
       }
-      throw await this.explainMissingParent(normalized, err)
+      const parent = parentPath(normalized)
+      if (!options?.parents) throw await this.explainMissingParent(normalized, err)
+      // Parent present (or this is the root), yet refused: creating parents can't fix it. Also ends the recursion.
+      if (normalized === "/" || (await this.exists(parent))) throw err
+      await this.mkdir(parent, options)
+      return this.mkdir(normalized, options)
     }
   }
 
-  /** Goes to the trash with REST (`trashed: true`); WebDAV can't report where it went (`trashed: undefined`). */
-  async delete(path: string): Promise<{ trashed?: boolean }> {
+  /**
+   * Refuses a non-empty folder unless `recursive`. Goes to the trash with REST (`trashed: true`); WebDAV can't
+   * report where it went (`trashed: undefined`).
+   */
+  async delete(path: string, options: DeleteOptions = {}): Promise<DeleteResult> {
     const normalized = refuseRoot(path, "delete")
-    return { trashed: await this.run((b) => b.delete(normalized)) }
+    const target = options.force ? await this.statIfExists(normalized) : await this.stat(normalized)
+    if (!target) return { path: normalized, existed: false, deleted: false }
+    if (target.type === "dir" && !options.recursive && (await this.list(normalized, { limit: 1 })).length) {
+      throw new YaDiskError("is_a_directory", `Folder is not empty: ${normalized}`, {
+        hint: `Check its contents (yadisk ls ${normalized}), then pass --recursive to delete it with everything inside`,
+      })
+    }
+    const result: DeleteResult = { path: normalized, existed: true, deleted: false, type: target.type }
+    if (options.dryRun) return result
+    return { ...result, deleted: true, trashed: await this.run((b) => b.delete(normalized)) }
   }
 
   /** A destination ending in "/" means "into this folder". Returns the resolved destination. */
-  copy(from: string, to: string, overwrite?: boolean): Promise<string> {
-    return this.transfer("copy", from, to, overwrite ?? false)
+  copy(from: string, to: string, options?: TransferOptions): Promise<string> {
+    return this.transfer("copy", from, to, options ?? {})
   }
 
   /** A destination ending in "/" means "into this folder". Returns the resolved destination. */
-  move(from: string, to: string, overwrite?: boolean): Promise<string> {
-    return this.transfer("move", from, to, overwrite ?? false)
+  move(from: string, to: string, options?: TransferOptions): Promise<string> {
+    return this.transfer("move", from, to, options ?? {})
   }
 
-  private async transfer(kind: "copy" | "move", from: string, to: string, overwrite: boolean): Promise<string> {
+  private async transfer(kind: "copy" | "move", from: string, to: string, options: TransferOptions): Promise<string> {
+    const overwrite = options.overwrite ?? false
     const source = refuseRoot(from, kind)
     const destination = refuseRoot(to.endsWith("/") ? `${to}${basenamePath(source)}` : to, `${kind} onto`)
     if (source === destination) throw new YaDiskError("usage", `Source and destination are the same: ${source}`)
+    if (options.dryRun) {
+      await this.checkTransfer(kind, source, destination, overwrite)
+      return destination
+    }
     // Overwriting a folder replaces the whole folder — never do it implicitly.
     if (overwrite) await this.refuseFolderTarget(destination, kind)
     try {
@@ -152,19 +189,21 @@ export class YaDiskClient {
     } catch (err) {
       if (!isYaDiskError(err, "conflict") && !isYaDiskError(err, "already_exists") && !isYaDiskError(err, "not_found")) throw err
       // WebDAV reports a missing source as 409 too; REST 404s may name either side.
-      if (!(await this.exists(source))) {
-        throw new YaDiskError("not_found", `Source not found: ${source}`, {
-          status: err.status,
-          hint: `Check the path: yadisk ls ${parentPath(source)}`,
-        })
-      }
+      if (!(await this.exists(source))) throw sourceNotFound(source, err.status)
       if (err.code !== "already_exists") throw await this.explainMissingParent(destination, err)
       await this.refuseFolderTarget(destination, kind)
-      throw new YaDiskError("already_exists", `Destination already exists: ${destination}`, {
-        status: err.status,
-        hint: "Pass --overwrite to replace that file",
-      })
+      throw destinationExists(destination, err.status)
     }
+  }
+
+  /** The checks a real copy/move fails on, made up front instead of after the fact (dry runs only). */
+  private async checkTransfer(kind: "copy" | "move", source: string, destination: string, overwrite: boolean): Promise<void> {
+    if (!(await this.exists(source))) throw sourceNotFound(source)
+    const target = await this.statIfExists(destination)
+    if (target?.type === "dir") throw folderTarget(destination, kind)
+    if (target && !overwrite) throw destinationExists(destination)
+    const parent = parentPath(destination)
+    if (!target && !(await this.exists(parent))) throw missingParent(parent)
   }
 
   // --- Publish ---
@@ -200,11 +239,13 @@ export class YaDiskClient {
 
     let method: BackendKind = this.backend
     try {
-      await this.run((b) => {
-        method = b.kind
-        // REST's upload link + PUT is retried as a unit (overwrite=true keeps it idempotent); WebDAV PUT retries itself.
-        return b.kind === "rest" ? withRetry(() => b.upload(path, localFile), this.retry) : b.upload(path, localFile)
-      })
+      await this.withParents(path, options?.parents, () =>
+        this.run((b) => {
+          method = b.kind
+          // REST's upload link + PUT is retried as a unit (overwrite=true keeps it idempotent); WebDAV PUT retries itself.
+          return b.kind === "rest" ? withRetry(() => b.upload(path, localFile), this.retry) : b.upload(path, localFile)
+        })
+      )
     } catch (err) {
       if (isYaDiskError(err, "conflict") || isYaDiskError(err, "already_exists")) {
         throw await this.explainUploadConflict(path, err)
@@ -225,7 +266,7 @@ export class YaDiskClient {
   }
 
   /** Yandex downloads the URL server-side (REST only). Destination ending in "/" = into that folder. */
-  async uploadFromUrl(url: string, remotePath: string): Promise<Resource> {
+  async uploadFromUrl(url: string, remotePath: string, options?: { parents?: boolean }): Promise<Resource> {
     const rest = this.requireRest("Upload from URL")
     const name = urlFileName(url)
     if (remotePath.endsWith("/") && !name) {
@@ -233,7 +274,7 @@ export class YaDiskClient {
     }
     const path = normalizePath(remotePath.endsWith("/") ? `${remotePath}${name}` : remotePath)
     try {
-      await rest.uploadFromUrl(url, path)
+      await this.withParents(path, options?.parents, () => rest.uploadFromUrl(url, path))
     } catch (err) {
       if (isYaDiskError(err, "already_exists")) {
         err.hint = `Remove it first (yadisk rm ${path}) or pick another destination`
@@ -248,7 +289,7 @@ export class YaDiskClient {
   // --- Download ---
 
   /** Files download as-is; folders download as a zip (REST only). `localDest` may be a folder or end in "/". */
-  async download(remotePath: string, localDest?: string): Promise<DownloadResult> {
+  async download(remotePath: string, localDest?: string, options?: DownloadOptions): Promise<DownloadResult> {
     const path = normalizePath(remotePath)
     const resource = await this.stat(path)
     const archive = resource.type === "dir"
@@ -258,8 +299,28 @@ export class YaDiskClient {
       })
     }
     const target = await resolveLocalTarget(localDest, archive ? `${resource.name || "disk"}.zip` : resource.name)
+    if (options?.skipIfSame && (await sameLocalFile(target, resource))) {
+      return { path, local_path: target, size: resource.size ?? 0, archive, skipped: true }
+    }
     const response = await this.run((b) => b.download(path))
-    return { path, local_path: target, size: await writeLocal(target, response), archive }
+    return { path, local_path: target, size: await writeLocal(target, response), archive, skipped: false }
+  }
+
+  /** Streams a file's contents. Folders are refused; `maxBytes` refuses bigger files before anything downloads. */
+  async open(remotePath: string, options?: OpenOptions): Promise<{ resource: Resource; body: ReadableStream<Uint8Array> }> {
+    const path = normalizePath(remotePath)
+    const resource = await this.stat(path)
+    if (resource.type === "dir") {
+      throw new YaDiskError("is_a_directory", `Is a directory: ${path}`, { hint: `List it: yadisk ls ${path}` })
+    }
+    const max = options?.maxBytes
+    if (max && (resource.size ?? 0) > max) {
+      throw new YaDiskError("usage", `File is ${resource.size} bytes, over the ${max}-byte limit: ${path}`, {
+        hint: `Raise --max-bytes (0 = no limit), or save it to disk: yadisk download ${path}`,
+      })
+    }
+    const response = await this.run((b) => b.download(path))
+    return { resource, body: response.body ?? new Response("").body! }
   }
 
   // --- Trash (REST only) ---
@@ -284,8 +345,9 @@ export class YaDiskClient {
       .slice(0, options?.limit ?? Infinity)
   }
 
-  /** Restores a trash item (its `path` from trashList). Returns the disk path it was restored to. */
-  trashRestore(trashPath: string, options?: { name?: string; overwrite?: boolean }): Promise<string> {
+  /** Restores a trash item (its `path` from trashList). */
+  /** Returns the disk path it was (or, with `dryRun`, would be) restored to. */
+  trashRestore(trashPath: string, options?: TrashRestoreOptions): Promise<string> {
     return this.requireRest("Trash").trashRestore(trashPath, options ?? {})
   }
 
@@ -310,6 +372,8 @@ export class YaDiskClient {
 
   // Sticky for the client's lifetime: re-probing REST on every call would double the latency of each request.
   private rejectRest(err: YaDiskError): void {
+    // Concurrent calls (batch uploads, multi-path stat) can all hit the rejection; warn once.
+    if (this.restRejected) return
     this.restRejected = true
     this.onWarning?.(`REST API rejected the OAuth token (${err.message}) — falling back to WebDAV`)
   }
@@ -320,6 +384,21 @@ export class YaDiskClient {
     throw new YaDiskError("auth", `${feature} requires an OAuth token (REST API)`, {
       hint: "Run: yadisk auth --oauth, or set YADISK_TOKEN",
     })
+  }
+
+  /**
+   * Runs `op`; on a conflict with `parents` set, ensures the parent of `path` exists and retries once. No "does the
+   * parent exist?" pre-check: a concurrent upload into the same new folder may have just created it, and this op
+   * still needs its retry. A conflict with another cause simply fails again.
+   */
+  private async withParents<T>(path: string, parents: boolean | undefined, op: () => Promise<T>): Promise<T> {
+    try {
+      return await op()
+    } catch (err) {
+      if (!parents || !isYaDiskError(err, "conflict")) throw err
+      await this.mkdir(parentPath(path), { parents: true })
+      return op()
+    }
   }
 
   // Advisory only: a write-only token can't read disk info, and that must not block (or de-REST) the upload itself.
@@ -367,29 +446,17 @@ export class YaDiskClient {
   }
 
   private async refuseFolderTarget(path: string, kind: "copy" | "move"): Promise<void> {
-    if ((await this.statIfExists(path))?.type !== "dir") return
-    throw new YaDiskError("is_a_directory", `Destination is an existing folder: ${path}`, {
-      hint: `To ${kind} into it, add a trailing slash: ${path}/`,
-    })
+    if ((await this.statIfExists(path))?.type === "dir") throw folderTarget(path, kind)
   }
 
   private async explainUploadConflict(path: string, original: YaDiskError): Promise<YaDiskError> {
-    if ((await this.statIfExists(path))?.type === "dir") {
-      return new YaDiskError("is_a_directory", `Destination is an existing folder: ${path}`, {
-        status: original.status,
-        hint: `To upload into it, add a trailing slash: ${path}/`,
-      })
-    }
+    if ((await this.statIfExists(path))?.type === "dir") return folderTarget(path, "upload", original.status)
     return this.explainMissingParent(path, original)
   }
 
   private async explainMissingParent(path: string, original: YaDiskError): Promise<YaDiskError> {
     const parent = parentPath(path)
-    if (await this.exists(parent)) return original
-    return new YaDiskError("conflict", `Parent folder does not exist: ${parent}`, {
-      status: original.status,
-      hint: `Create it first: yadisk mkdir ${parent}`,
-    })
+    return (await this.exists(parent)) ? original : missingParent(parent, original.status)
   }
 }
 

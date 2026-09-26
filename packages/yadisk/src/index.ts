@@ -1,6 +1,7 @@
 export { YaDiskClient, estimateUploadSeconds } from "./client"
 export { PublicClient } from "./public"
-export { getCredentials, encodeBasicAuth } from "./auth"
+export { getCredentials, resolveCredentials, encodeBasicAuth } from "./auth"
+export type { CredentialSource, ResolvedCredentials } from "./auth"
 export {
   getConfig,
   getConfigValue,
@@ -19,13 +20,22 @@ export type {
   BackendKind,
   ClientOptions,
   Credentials,
+  DeleteOptions,
+  DeleteResult,
   DiskInfo,
+  DownloadOptions,
   DownloadResult,
   FindOptions,
   GetCredentialsOptions,
   ListOptions,
+  ListSort,
+  MkdirOptions,
+  OpenOptions,
   Resource,
+  SortField,
+  TransferOptions,
   TrashItem,
+  TrashRestoreOptions,
   UploadOptions,
   UploadResult,
 } from "./types"

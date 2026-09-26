@@ -1,5 +1,6 @@
 import { YaDiskError, codeForStatus, parseRetryAfter, type ErrorCode } from "./errors"
 import { fetchWithTimeout, transportError, withRetry, type RetryOptions } from "./http"
+import { parentPath } from "./path"
 
 const API_URL = "https://cloud-api.yandex.net/v1/disk"
 const OPERATION_POLL_MS = 1000
@@ -117,9 +118,18 @@ async function apiError(response: Response, method: string, endpoint: string, pa
   const name = body.error ? ` ${body.error}` : ""
   return new YaDiskError(code, `${reason} (REST ${response.status}${name}: ${method} ${endpoint} ${target})`.replace(/ \)$/, ")"), {
     status: response.status,
-    hint: code === "auth" ? "OAuth token invalid, expired, or missing a scope — run: yadisk auth --oauth" : undefined,
+    hint: hintFor(code, params, target),
     retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
   })
+}
+
+function hintFor(code: ErrorCode, params: Params, target: Params[string]): string | undefined {
+  if (code === "auth") return "OAuth token invalid, expired, or missing a scope — run: yadisk auth --oauth"
+  if (code !== "not_found") return undefined
+  if (params.public_key) return "Check the link and --path; the owner may have unpublished it"
+  // Disk paths only: trash paths ("trash:/…") and operation ids get their hints from the caller.
+  if (typeof target === "string" && target.startsWith("/")) return `Check the path: yadisk ls ${parentPath(target)}`
+  return undefined
 }
 
 function operationIdFromHref(href?: string): string | undefined {

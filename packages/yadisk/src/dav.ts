@@ -2,7 +2,8 @@ import type { Backend, ListPage } from "./backend"
 import { YaDiskError, bodySnippet, httpError, isYaDiskError } from "./errors"
 import { fetchWithTimeout, transportError, withRetry, type RetryOptions } from "./http"
 import { parentPath } from "./path"
-import type { DiskInfo, Resource } from "./types"
+import { sortResources } from "./sort"
+import type { DiskInfo, ListSort, Resource } from "./types"
 import {
   QUOTA_PROPFIND,
   RESOURCE_PROPFIND,
@@ -43,9 +44,9 @@ export class DavBackend implements Backend {
     return parseMultiStatus(await this.readText(response), path)[0]
   }
 
-  // PROPFIND has no paging: return everything from `offset` in one page (the caller truncates to its limit)
-  // rather than re-fetching the whole folder per page.
-  async list(path: string, _limit: number, offset: number): Promise<ListPage> {
+  // PROPFIND has no paging or sorting: sort the whole folder, then return everything from `offset` in one page
+  // (the caller truncates to its limit) rather than re-fetching the whole folder per page.
+  async list(path: string, _limit: number, offset: number, sort?: ListSort): Promise<ListPage> {
     const response = await this.request("PROPFIND", path, {
       body: RESOURCE_PROPFIND,
       headers: { ...XML_HEADERS, Depth: "1" },
@@ -53,7 +54,8 @@ export class DavBackend implements Backend {
     const resources = parseMultiStatus(await this.readText(response), path)
     // Depth:1 includes the target itself; for a file it is the only entry.
     const selfIndex = Math.max(0, resources.findIndex((r) => r.path === path))
-    const items = resources.filter((_, i) => i !== selfIndex)
+    const children = resources.filter((_, i) => i !== selfIndex)
+    const items = sort ? sortResources(children, sort) : children
     return { self: resources[selfIndex], items: items.slice(offset), total: items.length }
   }
 

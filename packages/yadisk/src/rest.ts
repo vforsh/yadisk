@@ -3,13 +3,23 @@ import { YaDiskError, isYaDiskError } from "./errors"
 import type { RetryOptions } from "./http"
 import { normalizePath, parentPath } from "./path"
 import { RestApi, pathFromLink, type Link } from "./rest-api"
-import type { DiskInfo, Resource, TrashItem } from "./types"
+import type { DiskInfo, ListSort, Resource, TrashItem, TrashRestoreOptions } from "./types"
 
 const FILE_FIELDS = ["name", "path", "type", "size", "created", "modified", "md5", "sha256", "mime_type", "media_type", "public_url"]
 export const RESOURCE_FIELDS = FILE_FIELDS.join(",")
 const LIST_FIELDS = [...FILE_FIELDS, ...FILE_FIELDS.map((f) => `_embedded.items.${f}`), "_embedded.total"].join(",")
 const TRASH_ITEM_FIELDS = ["name", "path", "type", "size", "origin_path", "deleted"]
 const TRASH_FIELDS = [...TRASH_ITEM_FIELDS.map((f) => `_embedded.items.${f}`), "_embedded.total"].join(",")
+
+const DISK_FIELDS = "total_space,used_space,trash_size,max_file_size,user.login"
+
+interface RestDisk {
+  total_space: number
+  used_space: number
+  trash_size: number
+  max_file_size: number
+  user?: { login?: string }
+}
 
 export interface RestResource {
   name: string
@@ -38,17 +48,14 @@ export class RestBackend implements Backend {
   }
 
   async info(): Promise<DiskInfo> {
-    const disk = await this.api.call<{ total_space: number; used_space: number; trash_size: number; max_file_size: number }>(
-      "GET",
-      "",
-      { fields: "total_space,used_space,trash_size,max_file_size" }
-    )
+    const disk = await this.api.call<RestDisk>("GET", "", { fields: DISK_FIELDS })
     return {
       used_bytes: disk.used_space,
       available_bytes: disk.total_space - disk.used_space,
       total_bytes: disk.total_space,
       trash_bytes: disk.trash_size,
       max_file_size: disk.max_file_size,
+      login: disk.user?.login,
     }
   }
 
@@ -56,8 +63,8 @@ export class RestBackend implements Backend {
     return toResource(await this.api.call<RestResource>("GET", "/resources", { path, fields: RESOURCE_FIELDS }))
   }
 
-  async list(path: string, limit: number, offset: number): Promise<ListPage> {
-    const dir = await this.api.call<RestResource>("GET", "/resources", { path, limit, offset, fields: LIST_FIELDS })
+  async list(path: string, limit: number, offset: number, sort?: ListSort): Promise<ListPage> {
+    const dir = await this.api.call<RestResource>("GET", "/resources", { path, limit, offset, sort, fields: LIST_FIELDS })
     return {
       self: toResource(dir),
       items: (dir._embedded?.items ?? []).map(toResource),
@@ -129,7 +136,7 @@ export class RestBackend implements Backend {
   }
 
   /** Returns the restored disk path. */
-  async trashRestore(trashPath: string, options: { name?: string; overwrite?: boolean }): Promise<string> {
+  async trashRestore(trashPath: string, options: TrashRestoreOptions): Promise<string> {
     const name = trashPath.replace(/^trash:/, "").replace(/^\/+/, "")
     // "trash:/" itself means the whole trash — restoring it would dump every deleted item back onto the disk.
     if (!name.replace(/\/+$/, "")) {
@@ -149,11 +156,21 @@ export class RestBackend implements Backend {
     }
     const originPath = origin ? stripScheme(origin) : undefined
     const target = originPath && options.name ? normalizePath(`${parentPath(originPath)}/${options.name}`) : originPath
+    const existing = target && (options.overwrite || options.dryRun) ? await this.statOrUndefined(target) : undefined
     // Overwriting a folder replaces the whole folder — same rule as cp/mv.
-    if (options.overwrite && target && (await this.statOrUndefined(target))?.type === "dir") {
+    if (options.overwrite && existing?.type === "dir") {
       throw new YaDiskError("is_a_directory", `Restore target is an existing folder: ${target}`, {
         hint: "Restore under another name with --name, or move the folder away first",
       })
+    }
+    if (options.dryRun) {
+      if (existing && !options.overwrite) {
+        throw new YaDiskError("already_exists", `Restore target already exists: ${target}`, {
+          hint: "Pass --overwrite to replace that file, or restore under another --name",
+        })
+      }
+      if (!target) throw new YaDiskError("server", `Trash item ${path} has no origin path`)
+      return target
     }
     const link = await this.api.call<Link>("PUT", "/trash/resources/restore", { path, name: options.name, overwrite: options.overwrite })
     await this.api.settle(link, `Restore ${path}`)
@@ -206,18 +223,17 @@ function toIso(value: string): string {
 }
 
 /** Probes read (disk info) and write (upload link, nothing uploaded) access. Throws on an invalid token. */
-export async function checkToken(token: string, timeoutMs?: number): Promise<{ read: boolean; write: boolean }> {
+export async function checkToken(token: string, timeoutMs?: number): Promise<{ read: boolean; write: boolean; login?: string }> {
   const api = new RestApi(token, timeoutMs, { retries: 1 })
-  const probe = async (fn: () => Promise<unknown>) => {
+  const probe = async <T>(fn: () => Promise<T>): Promise<T | false> => {
     try {
-      await fn()
-      return true
+      return await fn()
     } catch (err) {
       if (isYaDiskError(err, "auth") && err.status === 403) return false
       throw err
     }
   }
-  const read = await probe(() => api.call("GET", "", { fields: "total_space" }))
+  const disk = await probe(() => api.call<RestDisk>("GET", "", { fields: "user.login" }))
   const write = await probe(() => api.call("GET", "/resources/upload", { path: `/.yadisk-token-check-${Date.now()}`, overwrite: true }))
-  return { read, write }
+  return { read: disk !== false, write: write !== false, login: disk ? disk.user?.login : undefined }
 }

@@ -1,8 +1,8 @@
 import { withRetryDefaults } from "./http"
-import { resolveLocalTarget, writeLocal } from "./local"
+import { resolveLocalTarget, sameLocalFile, writeLocal } from "./local"
 import { RESOURCE_FIELDS, toResource, type RestResource } from "./rest"
 import { RestApi, type Link } from "./rest-api"
-import type { ClientOptions, DownloadResult, ListOptions, Resource } from "./types"
+import type { ClientOptions, DownloadOptions, DownloadResult, ListOptions, Resource } from "./types"
 
 const PAGE_SIZE = 1000
 const LIST_FIELDS = [RESOURCE_FIELDS, ...RESOURCE_FIELDS.split(",").map((f) => `_embedded.items.${f}`), "_embedded.total"].join(",")
@@ -34,6 +34,7 @@ export class PublicClient {
         path,
         limit: Math.min(PAGE_SIZE, limit - items.length),
         offset,
+        sort: options?.sort,
         fields: LIST_FIELDS,
       })
       if (dir.type === "file") return [toResource(dir)]
@@ -46,12 +47,15 @@ export class PublicClient {
   }
 
   /** Published folders download as a zip archive. */
-  async download(publicUrl: string, localDest?: string, path = "/"): Promise<DownloadResult> {
+  async download(publicUrl: string, localDest?: string, path = "/", options?: DownloadOptions): Promise<DownloadResult> {
     const resource = await this.stat(publicUrl, path)
     const archive = resource.type === "dir"
     const target = await resolveLocalTarget(localDest, archive ? `${resource.name}.zip` : resource.name)
+    if (options?.skipIfSame && (await sameLocalFile(target, resource))) {
+      return { path: resource.path, local_path: target, size: resource.size ?? 0, archive, skipped: true }
+    }
     const link = await this.api.call<Link>("GET", "/public/resources/download", { public_key: publicUrl, path })
     const size = await writeLocal(target, await this.api.follow(link))
-    return { path: resource.path, local_path: target, size, archive }
+    return { path: resource.path, local_path: target, size, archive, skipped: false }
   }
 }

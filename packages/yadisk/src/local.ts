@@ -2,6 +2,7 @@ import { mkdir, rename, rm } from "fs/promises"
 import { dirname, join, resolve } from "path"
 import { YaDiskError } from "./errors"
 import { transportError } from "./http"
+import type { Resource } from "./types"
 
 export async function localFileSize(path: string): Promise<number> {
   let stats
@@ -59,6 +60,18 @@ export async function writeLocal(target: string, response: Response): Promise<nu
     }
     throw transportError(err)
   }
+}
+
+/** true when `localPath` is a file with the remote's size and md5. A remote without an md5 never counts as the same. */
+export async function sameLocalFile(localPath: string, remote: Resource): Promise<boolean> {
+  if (remote.type !== "file" || !remote.md5) return false
+  try {
+    const stats = await Bun.file(localPath).stat()
+    if (!stats.isFile() || stats.size !== remote.size) return false
+  } catch {
+    return false
+  }
+  return (await md5File(localPath)) === remote.md5
 }
 
 async function isLocalDir(path: string): Promise<boolean> {
