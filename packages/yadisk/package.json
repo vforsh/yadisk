@@ -1,6 +1,6 @@
 {
   "name": "@vforsh/yadisk",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Programmatic API for Yandex.Disk file management via the REST API and WebDAV",
   "type": "module",
   "files": ["src", "!src/**/*.test.ts"],
