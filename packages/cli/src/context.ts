@@ -1,9 +1,14 @@
-import { Command } from "commander"
+import { Command, Option } from "commander"
 import { YaDiskClient, YaDiskError, getCredentials } from "@vforsh/yadisk"
-import type { ClientOptions } from "@vforsh/yadisk"
+import type { ClientOptions, Resource, SortField, TrashItem } from "@vforsh/yadisk"
 import { note, warn } from "./output"
 
 export const program = new Command()
+
+export const RESOURCE_FIELDS = [
+  "name", "path", "type", "size", "created", "modified", "md5", "sha256", "content_type", "media_type", "public_url", "etag",
+] as const satisfies readonly (keyof Resource)[]
+export const TRASH_FIELDS = ["name", "path", "type", "size", "origin_path", "deleted"] as const satisfies readonly (keyof TrashItem)[]
 
 export function getClient(): YaDiskClient {
   // Options first: a malformed flag is a usage error even when credentials are missing.
@@ -45,8 +50,36 @@ export function parseCount(flag: string, min = 1): (raw: string) => number {
   }
 }
 
+/** `--fields a,b`: trims JSON output to those keys (unknown keys are a usage error). */
+export function fieldsOption(allowed: readonly string[]): Option {
+  return new Option("--fields <list>", `JSON keys to keep, comma-separated: ${allowed.join(",")}`).argParser((raw) => {
+    const fields = raw.split(",").map((f) => f.trim()).filter(Boolean)
+    const unknown = fields.filter((f) => !allowed.includes(f))
+    if (!fields.length || unknown.length) {
+      throw new YaDiskError("usage", `Invalid --fields: ${raw}`, { hint: `Valid fields: ${allowed.join(",")}` })
+    }
+    return fields
+  })
+}
+
+const SORT_FIELDS: SortField[] = ["name", "size", "created", "modified"]
+
+export function sortOption(): Option {
+  return new Option("--sort <field>", "Sort field, applied before --limit/--offset; prefix - for descending")
+    .choices(SORT_FIELDS.flatMap((f) => [f, `-${f}`]))
+    .default("name")
+}
+
+export function dryRunOption(): Option {
+  return new Option("--dry-run", "Run the checks a real run would fail on, change nothing (dry_run: true)")
+}
+
+export function dryRunFlag(options: { dryRun?: boolean }): { dry_run?: true } {
+  return options.dryRun ? { dry_run: true } : {}
+}
+
 /** Appends an "Examples:" block to a command's --help. */
-export function examples(lines: string[]): string {
+export function examples(lines: readonly string[]): string {
   return `\nExamples:\n${lines.map((l) => `  ${l}`).join("\n")}\n`
 }
 
